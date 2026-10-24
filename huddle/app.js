@@ -212,7 +212,7 @@ async function findLeagues(username) {
 
 async function connectLeague(lg) {
   const rec = lg.scoring_settings && lg.scoring_settings.rec || 0;
-  S.league = { id: lg.league_id, name: lg.name, userId: LEAGUES.userId, teams: lg.total_rosters || 12, mine: [], rostered: [], names: [], namesAt: 0 };
+  S.league = { id: lg.league_id, name: lg.name, userId: LEAGUES.userId, teams: lg.total_rosters || 12, size: (lg.roster_positions || []).length || 15, mine: [], rostered: [], names: [], namesAt: 0 };
   await fetchRosters();
   S.fmt = rec >= 1 ? 'ppr' : rec >= .5 ? 'half' : 'std';
   S.teams = S.league.teams;
@@ -367,7 +367,7 @@ function show(el, on) {
 function render() {
   document.querySelectorAll('.nav button').forEach(b => b.classList.toggle('on', b.dataset.tab === S.tab));
   document.querySelectorAll('.tab').forEach(t => t.classList.toggle('hidden', t.id !== 'tab-' + S.tab));
-  ({ rank: renderRank, ss: renderSS, trade: renderTrade, draft: renderDraft, team: renderTeam })[S.tab]();
+  ({ rank: renderRank, waiver: renderWaiver, ss: renderSS, trade: renderTrade, draft: renderDraft, team: renderTeam })[S.tab]();
 }
 
 /* ---------- Rankings ---------- */
@@ -435,6 +435,98 @@ function rankList() {
       <span class="num">${proj}</span><span class="num">${pos === 'HOT' ? '+' + fmtCount(adds[p.id]) : m.value}</span></button>`;
   });
   $('#rank-list').innerHTML = html || '<p class="empty">No players match.</p>';
+}
+
+/* ---------- Waiver wire ---------- */
+
+let WPOS = 'ALL', WSORT = 'season';
+
+// With a Sleeper league, anyone not on a roster there. Without one, players
+// drafted after the point most leagues this size stop rostering them.
+function waiverPool() {
+  const mine = new Set(S.team);
+  if (S.league) {
+    const taken = new Set(S.league.rostered);
+    return PLAYERS.filter(p => p.sid && !taken.has(p.sid) && !mine.has(p.id));
+  }
+  return PLAYERS.filter(p => I(p).adp > S.teams * 13 && !mine.has(p.id));
+}
+
+const trendingAdds = () => Object.fromEntries((LIVE && LIVE.trending || []).filter(([sid]) => SID[sid]).map(([sid, n]) => [SID[sid].id, n]));
+
+// Best way to fit a player onto your roster: what it does to your starters
+// this week and for the season, and who you'd drop if the roster is full
+function claim(p, adds) {
+  const size = S.league && S.league.size || 15;
+  const baseS = lineup(S.team, seasonVal).total, baseW = lineup(S.team, weekVal).total;
+  let best = null;
+  for (const q of S.team.length >= size ? S.team.map(id => BY_ID[id]) : [null]) {
+    const ids = S.team.filter(id => !q || id !== q.id).concat(p.id);
+    const s = lineup(ids, seasonVal).total - baseS, w = lineup(ids, weekVal).total - baseW;
+    const depth = I(p).avgWk - (q ? I(q).avgWk : 0);
+    const score = s + w * .5 + depth * .1 + Math.log10((adds[p.id] || 0) + 1) * .3;
+    if (!best || score > best.score) best = { p, drop: q, s, w, depth, score };
+  }
+  // Bids follow season value; a one-week fill-in is worth a small bid
+  const bid = Math.round(best.s * 5 + best.w * .5 + I(p).value * .15 + Math.log10((adds[p.id] || 0) + 1) * 2);
+  best.faab = Math.max(0, Math.min(60, bid));
+  return best;
+}
+
+function renderWaiver() {
+  const pool = waiverPool();
+  const adds = trendingAdds();
+  const source = S.league
+    ? `Players not on a roster in <b>${esc(S.league.name)}</b>.`
+    : `Players usually unrostered in ${S.teams}-team leagues. <button class="link" data-act="menu">Connect Sleeper</button> for your league's real waiver wire.`;
+
+  let picks = '';
+  if (S.team.length) {
+    const ranked = model().overall.filter(p => pool.includes(p)).slice(0, 60);
+    const cands = new Set(ranked.concat(pool.filter(p => adds[p.id])));
+    const recs = [...cands].map(p => claim(p, adds))
+      .filter(c => c.s > .05 || c.w > .05 || (c.depth > .3 && FLEX.includes(c.p.pos)))
+      .sort((a, b) => b.score - a.score).slice(0, 5);
+    picks = recs.length ? recs.map((c, i) => {
+      const why = [];
+      if (c.w > .05) why.push(`+${f1(c.w)} pts to your lineup this week`);
+      if (c.s > .05) why.push(`+${f1(c.s)} pts/wk for the season`);
+      if (!why.length) why.push(c.drop ? `Bench upgrade: +${f1(c.depth)} pts/wk over ${esc(c.drop.name)}` : 'Bench depth');
+      if (adds[c.p.id]) why.push(`🔥 ${fmtCount(adds[c.p.id])} adds`);
+      return `<div class="ss ${i === 0 ? 'best' : ''}">
+        <div class="ss-head"><button class="who" data-pid="${c.p.id}">${who(c.p)}</button><span class="badge ${i === 0 ? 'start' : ''}">${c.faab ? `FAAB ${c.faab}%` : 'Min bid'}</span></div>
+        <p class="small muted" style="margin:2px 0 10px">${why.join(' · ')}</p>
+        <button class="btn sm ${i === 0 ? 'grad' : 'ghost'}" data-claim="${c.p.id}:${c.drop ? c.drop.id : ''}">Add${c.drop ? ` · drop ${esc(c.drop.name)}` : ''}</button>
+      </div>`;
+    }).join('') : '<p class="empty">No available player improves your team right now.</p>';
+  }
+
+  const hasTrend = Object.keys(adds).length > 0;
+  const sort = WSORT === 'week' && !hasLive() || WSORT === 'hot' && !hasTrend ? 'season' : WSORT;
+  const sortSeg = [['season', 'Season'], ...(hasLive() ? [['week', weekLabel()]] : []), ...(hasTrend ? [['hot', 'Trending']] : [])];
+  let list = pool.filter(p => WPOS === 'ALL' || (WPOS === 'FLEX' ? FLEX.includes(p.pos) : p.pos === WPOS));
+  list.sort(sort === 'week' ? (a, b) => I(b).wk - I(a).wk
+    : sort === 'hot' ? (a, b) => (adds[b.id] || 0) - (adds[a.id] || 0) || I(b).ovr - I(a).ovr
+    : (a, b) => I(b).ovr - I(a).ovr);
+  const rows = list.slice(0, 60).map((p, i) => {
+    const m = I(p);
+    const proj = sort === 'week' ? f1(m.wk) : `${m.pts.toFixed(0)}<small>${f1(m.wk)}/wk</small>`;
+    return `<button class="prow" data-pid="${p.id}"><span class="rk">${i + 1}</span><span class="who">${who(p)}</span>
+      <span class="num">${proj}</span><span class="num">${sort === 'hot' ? (adds[p.id] ? '+' + fmtCount(adds[p.id]) : '—') : m.value}</span></button>`;
+  }).join('');
+  const chips = ['ALL', 'QB', 'RB', 'WR', 'TE', 'FLEX', 'K', 'DST'].map(p => `<button class="chip ${WPOS === p ? 'on' : ''}" data-wpos="${p}">${p === 'ALL' ? 'All' : p}</button>`).join('');
+
+  $('#tab-waiver').innerHTML = `<div class="wrap">
+    ${pageTop('Waiver Wire', weekLabel() + ' · free agents')}
+    <p class="small muted" style="margin:-4px 0 14px">${source}</p>
+    ${S.team.length ? `<h3>Top pickups for you</h3>${picks}` : `<div class="card"><h3>Get pickups picked for you</h3><p class="muted small">Add your roster on My Team${S.league ? '' : ' or connect your Sleeper league'} to see who improves your lineup, who to drop and what to bid.</p><button class="btn ghost sm" data-tab="team">Go to My Team</button></div>`}
+    <h3 style="margin-top:18px">Best available</h3>
+    ${sortSeg.length > 1 ? `<div class="seg" style="margin-bottom:10px">${sortSeg.map(([k, l]) => `<button class="${sort === k ? 'on' : ''}" data-wsort="${k}">${l}</button>`).join('')}</div>` : ''}
+    <div class="chips">${chips}</div>
+    <div class="thead"><span>#</span><span>Player</span><span>${sort === 'week' ? 'Week' : 'Proj'}</span><span>${sort === 'hot' ? 'Adds' : 'Value'}</span></div>
+    <div class="list">${rows || '<p class="empty">No available players match.</p>'}</div>
+    <p class="note">FAAB is a suggested bid as a share of your season budget.${S.league ? ' Adding here updates My Team only; make the claim in Sleeper too.' : ''}</p>
+  </div>`;
 }
 
 /* ---------- Start / Sit ---------- */
@@ -893,6 +985,14 @@ document.addEventListener('click', e => {
   }
   if (ds.rpos) { S.rankPos = ds.rpos; save(); renderRank(); return; }
   if (ds.rmode) { S.rankMode = ds.rmode; save(); renderRank(); return; }
+  if (ds.wpos) { WPOS = ds.wpos; renderWaiver(); return; }
+  if (ds.wsort) { WSORT = ds.wsort; renderWaiver(); return; }
+  if (ds.claim) {
+    const [id, drop] = ds.claim.split(':');
+    S.team = S.team.filter(x => x !== drop).concat(S.team.includes(id) ? [] : [id]);
+    S.out = S.out.filter(x => x !== drop);
+    save(); renderWaiver(); return;
+  }
   if (ds.league) {
     const lg = LEAGUES && LEAGUES.leagues[+ds.league];
     if (!lg || LEAGUE_BUSY) return;
