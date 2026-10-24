@@ -77,6 +77,7 @@ const API = 'https://api.sleeper.app';
 const LIVE_KEY = 'huddle-live';
 const LIVE_MAX_AGE = 3 * 36e5;
 const OUT_STATUS = ['Out', 'IR', 'PUP', 'Sus', 'NA'];
+const INJ_LONG = { Questionable: 'Questionable', Doubtful: 'Doubtful', Out: 'Out', IR: 'Injured reserve', PUP: 'PUP list', Sus: 'Suspended', NA: 'Not active' };
 const INJ_SHORT = { Questionable: 'Q', Doubtful: 'D', Out: 'Out', IR: 'IR', PUP: 'PUP', Sus: 'Susp', NA: 'NA' };
 let LIVE = null;      // { at, season, week, rows, trending, notes }
 let LIVE_BUSY = false, LIVE_ERR = '';
@@ -85,6 +86,37 @@ let PLAYERS = [], BY_ID = {}, SID = {}, PLAYING = new Set();
 
 try { LIVE = JSON.parse(localStorage.getItem(LIVE_KEY)); } catch {}
 function saveLive() { try { localStorage.setItem(LIVE_KEY, JSON.stringify(LIVE)); } catch {} }
+
+// Sleeper's full player list gives every player's team and injury status,
+// including injured players who have no weekly projection. It's large, so
+// keep a trimmed copy and refresh it once a day.
+const DIR_KEY = 'huddle-dir';
+const DIR_MAX_AGE = 864e5;
+let DIR = null; // { at, rows } with rows like LIVE.rows but no projection
+try { DIR = JSON.parse(localStorage.getItem(DIR_KEY)); } catch {}
+
+async function fetchDirectory() {
+  const all = await getJSON('/v1/players/nfl') || {};
+  const rostered = new Set(S.league ? S.league.rostered : []);
+  const rows = [];
+  for (const sid in all) {
+    const pl = all[sid];
+    if (!pl) continue;
+    const pos = pl.position === 'DEF' ? 'DST' : pl.position;
+    // Free agents without a team only matter if they're hurt or rostered
+    if (!POS.includes(pos) || !(pl.team || pl.injury_status || rostered.has(sid))) continue;
+    const name = pos === 'DST' ? `${pl.last_name || sid} D/ST` : pl.full_name || `${pl.first_name || ''} ${pl.last_name || ''}`.trim();
+    rows.push([sid, name, pos, pl.team || '', null, null, null, '', pl.injury_status || '']);
+  }
+  DIR = { at: Date.now(), rows };
+  try { localStorage.setItem(DIR_KEY, JSON.stringify(DIR)); } catch {}
+}
+
+// One download at a time, however many places ask for it
+let DIR_PROMISE = null;
+function loadDirectory() {
+  return DIR_PROMISE || (DIR_PROMISE = fetchDirectory().finally(() => { DIR_PROMISE = null; }));
+}
 
 async function getJSON(path) {
   const res = await fetch(API + path);
@@ -121,18 +153,23 @@ function applyLive() {
   for (const p of PLAYERS) index[p.pos === 'DST' ? 'DST|' + p.team : norm(p.name) + '|' + p.pos] = p;
   // Keep every rostered player in the league, even ones data.js doesn't have
   const keep = new Set(S.league ? S.league.rostered : []);
-  const rows = (LIVE && LIVE.rows || []).concat(S.league && S.league.names || []);
+  const ids = new Set(PLAYERS.map(p => p.id));
+  const rows = (LIVE && LIVE.rows || []).concat(DIR && DIR.rows || [], S.league && S.league.names || []);
 
   for (const [sid, name, pos, team, ppr, half, std, opp, inj] of rows) {
-    if (SID[sid]) continue;
+    // A player seen twice (projection, then directory) keeps the first
+    // row's numbers but picks up an injury status if it was missing
+    if (SID[sid]) { if (inj && !SID[sid].inj) SID[sid].inj = inj; continue; }
     let p = index[pos === 'DST' ? 'DST|' + sid : norm(name) + '|' + pos];
+    // Same name and position as a player already matched: a different person
+    if (p && p.sid && p.sid !== sid) p = null;
     if (!p) {
       if (!(ppr >= 3) && !keep.has(sid)) continue;
-      const id = slug(name + '-' + pos);
-      if (index['id|' + id]) continue;
+      let id = slug(name + '-' + pos);
+      if (ids.has(id)) id += '-' + slug(sid);
       p = { id, name, pos, team, ppr: (ppr || 0) * 17, rec: Math.max(0, (ppr || 0) - (std || 0)) * 17, est: true };
       PLAYERS.push(p);
-      index['id|' + id] = p;
+      ids.add(id);
     }
     p.sid = sid;
     if (team) p.team = team;
@@ -146,7 +183,7 @@ function applyLive() {
 const errText = e => e instanceof TypeError ? "Couldn't reach Sleeper. Check your connection." : e.message;
 
 // Every team in the league: owner, roster, starters, record, lineup slots
-async function fetchRosters() {
+async function fetchRosters(connecting) {
   const L = S.league;
   const [rosters, users, league] = await Promise.all([
     getJSON(`/v1/league/${L.id}/rosters`),
@@ -163,7 +200,9 @@ async function fetchRosters() {
     id: r.roster_id,
     name: owners[r.owner_id] || `Team ${r.roster_id}`,
     mine: r.owner_id === L.userId || (r.co_owners || []).includes(L.userId),
-    players: (r.players || []).map(String),
+    // IR and taxi players are normally in players too, but don't rely on it
+    players: [...new Set([...(r.players || []), ...(r.reserve || []), ...(r.taxi || [])].map(String))],
+    reserve: (r.reserve || []).map(String),
     starters: (r.starters || []).map(String).filter(x => x && x !== '0'),
     wins: r.settings && r.settings.wins || 0,
     losses: r.settings && r.settings.losses || 0,
@@ -174,24 +213,13 @@ async function fetchRosters() {
   L.rostered = L.rosters.flatMap(r => r.players);
   L.syncedAt = Date.now();
 
-  // Players without a projection this week (injured, on bye) still need a
-  // name. Sleeper's full player list is large, so keep names for every
-  // rostered player and only fetch it again when new players show up.
-  const known = new Set((LIVE && LIVE.rows || []).map(r => r[0]).concat((L.names || []).map(r => r[0])));
-  if (L.rostered.some(sid => !known.has(sid)) && Date.now() - (L.namesAt || 0) > 36e5) {
-    const all = await getJSON('/v1/players/nfl');
-    const names = [];
-    for (const sid of L.rostered) {
-      const pl = all[sid];
-      if (!pl) continue;
-      const pos = pl.position === 'DEF' ? 'DST' : pl.position;
-      if (!POS.includes(pos)) continue;
-      const name = pos === 'DST' ? `${pl.last_name || sid} D/ST` : pl.full_name || `${pl.first_name || ''} ${pl.last_name || ''}`.trim();
-      names.push([sid, name, pos, pl.team || '', null, null, null, '', pl.injury_status || '']);
-    }
-    L.names = names;
-    L.namesAt = Date.now();
-  }
+  delete L.names; delete L.namesAt;
+
+  // Someone rostered a player the directory doesn't know yet: refresh it,
+  // but not more than once an hour
+  const known = new Set((DIR && DIR.rows || []).map(r => r[0]));
+  const stale = Date.now() - (DIR && DIR.at || 0);
+  if (stale > DIR_MAX_AGE || (L.rostered.some(sid => !known.has(sid)) && (connecting || stale > 36e5))) await loadDirectory();
 }
 
 const LEAGUE_MAX_AGE = 6e4;
@@ -274,8 +302,8 @@ async function findLeagues(username) {
 
 async function connectLeague(lg) {
   const rec = lg.scoring_settings && lg.scoring_settings.rec || 0;
-  S.league = { id: lg.league_id, name: lg.name, userId: LEAGUES.userId, teams: lg.total_rosters || 12, size: 15, slots: toSlots(lg.roster_positions || []), mine: [], rostered: [], rosters: [], names: [], namesAt: 0 };
-  await fetchRosters();
+  S.league = { id: lg.league_id, name: lg.name, userId: LEAGUES.userId, teams: lg.total_rosters || 12, size: 15, slots: toSlots(lg.roster_positions || []), mine: [], rostered: [], rosters: [] };
+  await fetchRosters(true);
   S.fmt = rec >= 1 ? 'ppr' : rec >= .5 ? 'half' : 'std';
   S.teams = S.league.teams;
   LEAGUES = null;
@@ -332,7 +360,7 @@ function model() {
     const repl = pts(list[Math.min(list.length - 1, Math.round(T * REPL[pos] * slotScale[pos]) - 1)]);
     list.forEach((p, i) => {
       const v = pts(p) - repl;
-      const bye = hasLive() && !PLAYING.has(p.team);
+      const bye = hasLive() && !!p.team && !PLAYING.has(p.team);
       const wk = OUT_STATUS.includes(p.inj) ? 0 : p.live ? p.live[S.fmt] : bye ? 0 : pts(p) / 17;
       info[p.id] = { pts: pts(p), wk, avgWk: pts(p) / 17, bye, opp: p.live ? p.live.opp : '', posRank: i + 1, vor: v, ovr: pos === 'K' || pos === 'DST' ? v * .3 : v };
     });
@@ -392,8 +420,10 @@ function lineup(ids, val, slotList = curSlots()) {
   const used = new Set();
   const slots = new Array(slotList.length);
   const order = slotList.map((_, i) => i).sort((a, b) => SLOT_OK[slotList[a]].length - SLOT_OK[slotList[b]].length || a - b);
+  // This week's lineup leaves a slot empty rather than start someone who's out
+  const playable = x => val !== weekVal || !cantPlay(x);
   for (const i of order) {
-    const p = pool.find(x => !used.has(x.id) && SLOT_OK[slotList[i]].includes(x.pos));
+    const p = pool.find(x => !used.has(x.id) && SLOT_OK[slotList[i]].includes(x.pos) && playable(x));
     if (p) used.add(p.id);
     slots[i] = { slot: slotList[i], p };
   }
@@ -533,9 +563,12 @@ const trendingAdds = () => Object.fromEntries((LIVE && LIVE.trending || []).filt
 // this week and for the season, and who you'd drop if the roster is full
 function claim(p, adds) {
   const size = S.league && S.league.size || 15;
+  const r = myRoster();
+  const parked = r ? idsOf(r.reserve || []) : [];
   const baseS = lineup(S.team, seasonVal).total, baseW = lineup(S.team, weekVal).total;
   let best = null;
-  for (const q of S.team.length >= size ? S.team.map(id => BY_ID[id]) : [null]) {
+  const open = S.team.filter(id => !parked.includes(id)).length < size;
+  for (const q of open ? [null] : S.team.filter(id => !parked.includes(id)).map(id => BY_ID[id])) {
     const ids = S.team.filter(id => !q || id !== q.id).concat(p.id);
     const s = lineup(ids, seasonVal).total - baseS, w = lineup(ids, weekVal).total - baseW;
     const depth = I(p).avgWk - (q ? I(q).avgWk : 0);
@@ -1006,6 +1039,17 @@ function sleeperLineupCard(lu) {
     <p class="muted small" style="margin:6px 0 0">Make these changes in the Sleeper app.</p></div>`;
 }
 
+// Everyone on your roster with an injury designation, most serious first
+function injuryCard() {
+  const order = Object.keys(INJ_LONG).reverse();
+  const r = myRoster();
+  const hurt = S.team.map(id => BY_ID[id]).filter(p => p.inj && INJ_LONG[p.inj])
+    .sort((a, b) => order.indexOf(a.inj) - order.indexOf(b.inj));
+  if (!hurt.length) return '';
+  return `<h3>Injury report</h3><div class="list">${hurt.map(p => `<button class="prow simple" data-pid="${p.id}"><span class="who">${who(p)}</span>
+    <span class="num ${p.inj === 'Questionable' ? 'q' : 'out'}" style="font-size:.8rem">${INJ_LONG[p.inj]}${r && r.reserve.includes(p.sid) ? '<small>IR slot</small>' : ''}</span></button>`).join('')}</div>`;
+}
+
 function renderTeam() {
   const el = $('#tab-team');
   if (S.league && S.teamView === 'league' && S.league.rosters && S.league.rosters.length) { renderLeague(el); return; }
@@ -1040,6 +1084,7 @@ function renderTeam() {
       <h2>${f1(lu.total)} pts / week</h2>
       <p>${Math.round(ratio * 100)}% of an average ${S.teams}-team starting lineup.${place}${weak ? ` ${weak} empty slot${weak > 1 ? 's' : ''}.` : ''}</p></div>
     ${sleeperLineupCard(lu)}
+    ${injuryCard()}
     <h3>Optimal lineup</h3>${lineupList(lu, weekVal)}
     ${lu.bench.length ? `<h3>Bench</h3><div class="list">${lu.bench.map(p => `<button class="prow simple" data-pid="${p.id}"><span class="who">${who(p)}</span><span class="num">${f1(weekVal(p))}</span></button>`).join('')}</div>` : ''}
     <div class="card"><h3>Strength by slot</h3><p class="muted small">Compared with an average starter. 100% is league average.</p>${bars}</div>
@@ -1126,6 +1171,7 @@ function liveStatus() {
   if (!LIVE) return 'Not loaded yet.';
   let t = `Updated ${ago(LIVE.at)}. `;
   t += hasLive() ? `Week ${LIVE.week} projections for ${LIVE.rows.length} players, plus injuries and byes.` : 'No weekly projections right now (preseason or offseason), so rankings use built-in projections.';
+  if (DIR) t += ` Injury report updated ${ago(DIR.at)}.`;
   if (LIVE.notes && LIVE.notes.length) t += ` <span class="out">Couldn't load ${esc(LIVE.notes.join(', '))}.</span>`;
   return t;
 }
@@ -1284,7 +1330,8 @@ document.addEventListener('click', e => {
     case 'reset':
       if (confirm('Erase your team, drafts and settings?')) {
         clearTimeout(cpuTimer); cpuTimer = null;
-        try { localStorage.removeItem(KEY); } catch {}
+        try { localStorage.removeItem(KEY); localStorage.removeItem(DIR_KEY); } catch {}
+        DIR = null;
         LEAGUES = null; LEAGUE_ERR = '';
         S = load(); applyLive(); show($('#menu'), false); render();
       }
@@ -1321,6 +1368,14 @@ render();
 function checkFresh() {
   if (Date.now() - (LIVE && LIVE.at || 0) > LIVE_MAX_AGE) refreshLive();
   else syncLeague();
+  // Injury statuses for every player, league or not
+  if (Date.now() - (DIR && DIR.at || 0) > DIR_MAX_AGE) {
+    loadDirectory().then(() => {
+      applyLive();
+      if (S.league && S.league.rosters) applyLeagueTeam();
+      cleanIds(); save(); render(); refreshMenu();
+    }).catch(() => {});
+  }
 }
 checkFresh();
 document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') checkFresh(); });
