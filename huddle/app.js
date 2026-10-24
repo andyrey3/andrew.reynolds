@@ -7,7 +7,7 @@ const DEFAULTS = {
   fmt: 'half', teams: 12, tab: 'rank', rankPos: 'ALL',
   team: [], out: [], ss: [], ssAdj: {}, ssNeed: 'balanced',
   give: [], get: [], draft: null, setup: { teams: 12, slot: 0 },
-  rankMode: 'season', availOnly: false, league: null
+  rankMode: 'season', availOnly: false, league: null, teamView: 'mine'
 };
 let S = load();
 
@@ -29,6 +29,19 @@ const FMT = { ppr: 'PPR', half: 'Half PPR', std: 'Standard' };
 const POS = ['QB', 'RB', 'WR', 'TE', 'K', 'DST'];
 const FLEX = ['RB', 'WR', 'TE'];
 const SLOTS = ['QB', 'RB', 'RB', 'WR', 'WR', 'TE', 'FLEX', 'K', 'DST'];
+// Positions each lineup slot accepts, using Sleeper's slot names
+const SLOT_OK = {
+  QB: ['QB'], RB: ['RB'], WR: ['WR'], TE: ['TE'], K: ['K'], DST: ['DST'],
+  FLEX: ['RB', 'WR', 'TE'], WRRB_FLEX: ['RB', 'WR'], REC_FLEX: ['WR', 'TE'], SUPER_FLEX: ['QB', 'RB', 'WR', 'TE']
+};
+// How often each flex slot ends up holding each position
+const FLEX_SHARE = {
+  FLEX: { RB: .45, WR: .45, TE: .1 }, WRRB_FLEX: { RB: .5, WR: .5 },
+  REC_FLEX: { WR: .8, TE: .2 }, SUPER_FLEX: { QB: .85, RB: .05, WR: .1, TE: 0 }
+};
+const SLOT_LABEL = { FLEX: 'FLEX', WRRB_FLEX: 'W/R', REC_FLEX: 'W/T', SUPER_FLEX: 'SF' };
+const toSlots = positions => positions.map(x => x === 'DEF' ? 'DST' : x).filter(x => SLOT_OK[x]);
+const curSlots = () => S.league && S.league.slots && S.league.slots.length ? S.league.slots : SLOTS;
 // Week-to-week spread by position, as a share of the projection
 const CV = { QB: .28, RB: .42, WR: .48, TE: .52, K: .38, DST: .55 };
 // Replacement level = the Nth best player at the position, N = teams × this
@@ -106,7 +119,8 @@ function applyLive() {
   M = null;
   const index = {};
   for (const p of PLAYERS) index[p.pos === 'DST' ? 'DST|' + p.team : norm(p.name) + '|' + p.pos] = p;
-  const keep = new Set(S.league ? S.league.mine : []);
+  // Keep every rostered player in the league, even ones data.js doesn't have
+  const keep = new Set(S.league ? S.league.rostered : []);
   const rows = (LIVE && LIVE.rows || []).concat(S.league && S.league.names || []);
 
   for (const [sid, name, pos, team, ppr, half, std, opp, inj] of rows) {
@@ -129,12 +143,36 @@ function applyLive() {
   BY_ID = Object.fromEntries(PLAYERS.map(p => [p.id, p]));
 }
 
+const errText = e => e instanceof TypeError ? "Couldn't reach Sleeper. Check your connection." : e.message;
+
+// Every team in the league: owner, roster, starters, record, lineup slots
 async function fetchRosters() {
   const L = S.league;
-  const rosters = await getJSON(`/v1/league/${L.id}/rosters`) || [];
-  const mine = rosters.find(r => r.owner_id === L.userId || (r.co_owners || []).includes(L.userId));
-  L.mine = (mine && mine.players || []).map(String);
-  L.rostered = rosters.flatMap(r => r.players || []).map(String);
+  const [rosters, users, league] = await Promise.all([
+    getJSON(`/v1/league/${L.id}/rosters`),
+    getJSON(`/v1/league/${L.id}/users`).catch(() => []),
+    getJSON(`/v1/league/${L.id}`).catch(() => null)
+  ]);
+  const owners = Object.fromEntries((users || []).map(u => [u.user_id, u.metadata && u.metadata.team_name || u.display_name]));
+  if (league && Array.isArray(league.roster_positions)) {
+    L.slots = toSlots(league.roster_positions);
+    L.size = league.roster_positions.filter(x => x !== 'IR' && x !== 'TAXI').length;
+  }
+  if (league && league.name) L.name = league.name;
+  L.rosters = (rosters || []).map(r => ({
+    id: r.roster_id,
+    name: owners[r.owner_id] || `Team ${r.roster_id}`,
+    mine: r.owner_id === L.userId || (r.co_owners || []).includes(L.userId),
+    players: (r.players || []).map(String),
+    starters: (r.starters || []).map(String).filter(x => x && x !== '0'),
+    wins: r.settings && r.settings.wins || 0,
+    losses: r.settings && r.settings.losses || 0,
+    ties: r.settings && r.settings.ties || 0
+  }));
+  const mine = L.rosters.find(r => r.mine);
+  L.mine = mine ? mine.players : [];
+  L.rostered = L.rosters.flatMap(r => r.players);
+  L.syncedAt = Date.now();
 
   // Players without a projection this week (injured, on bye) still need a
   // name. Sleeper's full player list is large, so keep names for every
@@ -155,6 +193,30 @@ async function fetchRosters() {
     L.namesAt = Date.now();
   }
 }
+
+const LEAGUE_MAX_AGE = 6e4;
+let SYNC_BUSY = false, SYNC_ERR = '';
+
+// Rosters change all the time, so re-read them whenever the app opens
+async function syncLeague(force) {
+  if (!S.league || SYNC_BUSY || LIVE_BUSY) return;
+  if (!force && Date.now() - (S.league.syncedAt || 0) < LEAGUE_MAX_AGE) return;
+  SYNC_BUSY = true; SYNC_ERR = '';
+  refreshLeagueUI();
+  try {
+    await fetchRosters();
+    applyLive();
+    applyLeagueTeam();
+    cleanIds();
+    save();
+  } catch (e) { SYNC_ERR = errText(e); }
+  SYNC_BUSY = false;
+  render();
+  refreshMenu();
+}
+
+const idsOf = sids => sids.map(sid => SID[sid] && SID[sid].id).filter(Boolean);
+const myRoster = () => S.league && S.league.rosters && S.league.rosters.find(r => r.mine);
 
 // Make My Team match your Sleeper roster
 function applyLeagueTeam() {
@@ -187,7 +249,7 @@ async function refreshLive() {
     LIVE = next;
     saveLive();
     if (S.league) {
-      try { await fetchRosters(); } catch { LIVE.notes.push('league rosters'); }
+      try { await fetchRosters(); SYNC_ERR = ''; } catch (e) { SYNC_ERR = errText(e); LIVE.notes.push('league rosters'); }
     }
     applyLive();
     if (S.league) applyLeagueTeam();
@@ -212,7 +274,7 @@ async function findLeagues(username) {
 
 async function connectLeague(lg) {
   const rec = lg.scoring_settings && lg.scoring_settings.rec || 0;
-  S.league = { id: lg.league_id, name: lg.name, userId: LEAGUES.userId, teams: lg.total_rosters || 12, size: (lg.roster_positions || []).length || 15, mine: [], rostered: [], names: [], namesAt: 0 };
+  S.league = { id: lg.league_id, name: lg.name, userId: LEAGUES.userId, teams: lg.total_rosters || 12, size: 15, slots: toSlots(lg.roster_positions || []), mine: [], rostered: [], rosters: [], names: [], namesAt: 0 };
   await fetchRosters();
   S.fmt = rec >= 1 ? 'ppr' : rec >= .5 ? 'half' : 'std';
   S.teams = S.league.teams;
@@ -250,15 +312,24 @@ function tierize(arr, key, out, maxSize) {
 }
 
 function model() {
-  const key = S.fmt + S.teams + '|' + (LIVE && LIVE.at);
+  const key = S.fmt + S.teams + '|' + (LIVE && LIVE.at) + '|' + curSlots().join();
   if (M && MKEY === key) return M;
   const T = S.teams;
   const pts = p => S.fmt === 'ppr' ? p.ppr : S.fmt === 'half' ? p.ppr - p.rec / 2 : p.ppr - p.rec;
   const info = {}, byPos = {};
+  // Leagues with more starters at a position (superflex, 3 WR) push its
+  // replacement level deeper, which makes those players worth more
+  const share = slots => {
+    const c = { QB: 0, RB: 0, WR: 0, TE: 0, K: 0, DST: 0 };
+    for (const x of slots) for (const pos of SLOT_OK[x]) c[pos] += (FLEX_SHARE[x] || {})[pos] ?? 1;
+    return c;
+  };
+  const std = share(SLOTS), cur = share(curSlots());
+  const slotScale = Object.fromEntries(POS.map(pos => [pos, Math.max(.5, cur[pos] / std[pos])]));
 
   for (const pos of POS) {
     const list = PLAYERS.filter(p => p.pos === pos).sort((a, b) => pts(b) - pts(a));
-    const repl = pts(list[Math.min(list.length - 1, Math.round(T * REPL[pos]) - 1)]);
+    const repl = pts(list[Math.min(list.length - 1, Math.round(T * REPL[pos] * slotScale[pos]) - 1)]);
     list.forEach((p, i) => {
       const v = pts(p) - repl;
       const bye = hasLive() && !PLAYING.has(p.team);
@@ -314,22 +385,26 @@ function range(p, adj = {}) {
   return { proj, floor, ceil: proj * (1 + CV[p.pos] * 1.25) };
 }
 
-// Best legal starting lineup; greedy is optimal because FLEX comes last
-function lineup(ids, val) {
-  const pool = ids.map(id => BY_ID[id]).filter(Boolean).sort((a, b) => val(b) - val(a));
+// Best legal starting lineup. Filling the strictest slots first and flex
+// spots last picks the best lineup for every standard Sleeper format.
+function lineup(ids, val, slotList = curSlots()) {
+  const pool = [...new Set(ids)].map(id => BY_ID[id]).filter(Boolean).sort((a, b) => val(b) - val(a));
   const used = new Set();
-  const slots = SLOTS.map(slot => {
-    const ok = slot === 'FLEX' ? FLEX : [slot];
-    const p = pool.find(x => !used.has(x.id) && ok.includes(x.pos));
+  const slots = new Array(slotList.length);
+  const order = slotList.map((_, i) => i).sort((a, b) => SLOT_OK[slotList[a]].length - SLOT_OK[slotList[b]].length || a - b);
+  for (const i of order) {
+    const p = pool.find(x => !used.has(x.id) && SLOT_OK[slotList[i]].includes(x.pos));
     if (p) used.add(p.id);
-    return { slot, p };
-  });
+    slots[i] = { slot: slotList[i], p };
+  }
   return { slots, bench: pool.filter(p => !used.has(p.id)), total: sum(slots.map(s => s.p ? val(s.p) : 0)) };
 }
 
 const cantPlay = p => S.out.includes(p.id) || OUT_STATUS.includes(p.inj) || I(p).bye;
 const weekVal = p => cantPlay(p) ? 0 : I(p).wk;
 const seasonVal = p => I(p).avgWk;
+
+const ordinal = n => n + (n % 100 >= 11 && n % 100 <= 13 ? 'th' : ['th', 'st', 'nd', 'rd'][n % 10] || 'th');
 
 function letter(r) {
   return r >= 1.15 ? 'A+' : r >= 1.08 ? 'A' : r >= 1.03 ? 'B+' : r >= .98 ? 'B' : r >= .93 ? 'C+' : r >= .88 ? 'C' : 'D';
@@ -588,6 +663,80 @@ function sideValue(ids) {
   return sum(vals.map((v, i) => v * Math.pow(.78, i)));
 }
 
+let TRADE_WITH = 0, IDEAS = null, IDEAS_KEY = '';
+
+// Trades with other teams in your league that improve your starting lineup,
+// don't hurt theirs, and are close enough in value that they might accept
+function tradeIdeas() {
+  model();
+  const key = [MKEY, S.league.syncedAt, S.team.join()].join('|');
+  if (IDEAS && IDEAS_KEY === key) return IDEAS;
+  const mine = S.team;
+  const myBase = lineup(mine, seasonVal).total;
+  const tradeable = ids => ids.filter(id => !['K', 'DST'].includes(BY_ID[id].pos) && I(BY_ID[id]).value >= 3)
+    .sort((a, b) => I(BY_ID[b]).value - I(BY_ID[a]).value);
+  const pairs = ids => ids.flatMap((a, i) => ids.slice(i + 1).map(b => [a, b]));
+  const myTrade = tradeable(mine), myTop = myTrade.slice(0, 8);
+  const ideas = [];
+  for (const r of S.league.rosters) {
+    if (r.mine) continue;
+    const theirs = idsOf(r.players);
+    const theirBase = lineup(theirs, seasonVal).total;
+    const theirTrade = tradeable(theirs), theirTop = theirTrade.slice(0, 8);
+    const found = [];
+    const tryDeal = (give, get) => {
+      const gv = sideValue(give), rv = sideValue(get);
+      if (gv < rv * .92 || gv > rv * 1.3) return;
+      const me = lineup(mine.filter(x => !give.includes(x)).concat(get), seasonVal).total - myBase;
+      if (me < .4) return;
+      const them = lineup(theirs.filter(x => !get.includes(x)).concat(give), seasonVal).total - theirBase;
+      if (them < -.1) return;
+      found.push({ r, give, get, me, them, gv, rv, score: me + Math.min(them, me) * .6 });
+    };
+    for (const a of myTrade) for (const b of theirTrade) tryDeal([a], [b]);
+    for (const g of pairs(myTop)) for (const b of theirTrade) tryDeal(g, [b]);
+    for (const a of myTrade) for (const g of pairs(theirTop)) tryDeal([a], g);
+    found.sort((a, b) => b.score - a.score);
+    // Up to three different ideas per team, without repeating the player you get
+    const seen = new Set();
+    for (const f of found) {
+      const k = f.get.join();
+      if (seen.has(k)) continue;
+      seen.add(k);
+      ideas.push(f);
+      if (seen.size >= 3) break;
+    }
+  }
+  IDEAS = ideas.sort((a, b) => b.score - a.score);
+  IDEAS_KEY = key;
+  return IDEAS;
+}
+
+function tradeIdeasSection() {
+  if (!S.league) return `<h3>Trade ideas</h3>${leagueSection()}`;
+  if (!S.league.rosters || !S.league.rosters.length) return `<h3>Trade ideas</h3><div class="card"><p class="muted small" style="margin:0">${SYNC_BUSY ? 'Loading your league…' : 'Sync your league to see trade ideas.'}</p></div>`;
+  if (!S.team.length) return '';
+  const others = S.league.rosters.filter(r => !r.mine);
+  if (TRADE_WITH && !others.some(r => r.id === TRADE_WITH)) TRADE_WITH = 0;
+  const all = tradeIdeas();
+  const list = (TRADE_WITH ? all.filter(x => x.r.id === TRADE_WITH) : all).slice(0, TRADE_WITH ? 3 : 6);
+  const chips = [[0, 'All teams'], ...others.map(r => [r.id, r.name])]
+    .map(([id, n]) => `<button class="chip ${TRADE_WITH === id ? 'on' : ''}" data-tradewith="${id}">${esc(n)}</button>`).join('');
+  const names = ids => ids.map(id => `<b>${esc(BY_ID[id].name)}</b> <span class="muted">${BY_ID[id].pos}</span>`).join(' + ');
+  const cards = list.map(x => {
+    const fair = x.gv / x.rv;
+    return `<div class="idea">
+      <div class="small muted">With ${esc(x.r.name)}</div>
+      <div class="deal"><span class="small">Give</span><div>${names(x.give)}</div><span class="small">Get</span><div>${names(x.get)}</div></div>
+      <div class="small"><span class="up">+${f1(x.me)} pts/wk for you</span> · <span class="muted">${x.them >= .05 ? `+${f1(x.them)} for them` : 'even for them'} · ${fair > 1.12 ? 'you pay a little extra' : 'fair value'}</span></div>
+      <button class="btn ghost sm" data-idea="${all.indexOf(x)}">Open in analyzer</button></div>`;
+  }).join('');
+  return `<h3>Trade ideas</h3>
+    <div class="chips">${chips}</div>
+    ${cards || `<p class="empty">No trades found that help you without hurting them${TRADE_WITH ? ' with this team' : ''}.</p>`}
+    <p class="note" style="margin:0 0 18px">Based on rest-of-season projections and real rosters in ${esc(S.league.name)}.</p>`;
+}
+
 function renderTrade() {
   const side = (key, title) => {
     const rows = S[key].map(id => {
@@ -624,7 +773,10 @@ function renderTrade() {
   }
 
   $('#tab-trade').innerHTML = `<div class="wrap">
-    ${pageTop('Trade Analyzer', 'Is it a fair deal?')}
+    ${pageTop('Trades', 'Ideas and analyzer')}
+    ${S.league ? syncBar() : ''}
+    ${tradeIdeasSection()}
+    <h3 id="analyzer">Trade analyzer</h3>
     ${verdict}
     ${side('give', 'You give')}
     ${side('get', 'You get')}
@@ -759,12 +911,12 @@ function renderDraft() {
 
 function renderDraftResults(d) {
   const val = seasonVal;
-  const totals = Array.from({ length: d.teams }, (_, t) => ({ t, total: lineup(teamPicks(d, t), val).total }))
+  const totals = Array.from({ length: d.teams }, (_, t) => ({ t, total: lineup(teamPicks(d, t), val, SLOTS).total }))
     .sort((a, b) => b.total - a.total);
   const place = totals.findIndex(x => x.t === d.slot) + 1;
   const pctile = 1 - (place - 1) / Math.max(1, d.teams - 1);
   const grade = pctile >= .95 ? 'A+' : pctile >= .8 ? 'A' : pctile >= .65 ? 'B+' : pctile >= .5 ? 'B' : pctile >= .35 ? 'C+' : pctile >= .2 ? 'C' : 'D';
-  const lu = lineup(teamPicks(d, d.slot), val);
+  const lu = lineup(teamPicks(d, d.slot), val, SLOTS);
   const stand = totals.map((x, i) => `<div class="stand ${x.t === d.slot ? 'me' : ''}"><span>${i + 1}</span><span>${teamName(d, x.t)}</span><b>${f1(x.total)}</b></div>`).join('');
 
   $('#tab-draft').innerHTML = `<div class="wrap">${pageTop('Draft Results', `${d.teams}-team mock · pick ${d.slot + 1}`)}
@@ -795,35 +947,99 @@ function openBoard() {
 
 function lineupList(lu, val) {
   return `<div class="list">${lu.slots.map(({ slot, p }) => p
-    ? `<button class="prow slot" data-pid="${p.id}"><span class="pos ${slot === 'FLEX' ? 'FLEX' : p.pos}">${slot}</span><span class="who">${who(p)}</span><span class="num">${f1(val(p))}</span></button>`
-    : `<div class="prow slot"><span class="pos empty">${slot}</span><span class="muted small">Empty</span><span></span></div>`).join('')}</div>`;
+    ? `<button class="prow slot" data-pid="${p.id}"><span class="pos ${SLOT_LABEL[slot] ? 'FLEX' : p.pos}">${SLOT_LABEL[slot] || slot}</span><span class="who">${who(p)}</span><span class="num">${f1(val(p))}</span></button>`
+    : `<div class="prow slot"><span class="pos empty">${SLOT_LABEL[slot] || slot}</span><span class="muted small">Empty</span><span></span></div>`).join('')}</div>`;
+}
+
+const avgFor = slot => { const M = model(); return M.avg[slot] ?? (slot === 'SUPER_FLEX' ? M.avg.QB : M.avg.FLEX); };
+
+// Every team in your Sleeper league, strongest projected lineup first
+function leagueTeams(val) {
+  return S.league.rosters.map(r => ({ r, ids: idsOf(r.players), lu: lineup(idsOf(r.players), val) }))
+    .sort((a, b) => b.lu.total - a.lu.total);
+}
+
+function syncBar() {
+  const L = S.league;
+  return `<div class="sync"><span>${esc(L.name)} · ${syncText()}${L.missing ? ` · ${L.missing} player${L.missing > 1 ? 's' : ''} not matched` : ''}</span>
+    <button class="pill" data-act="league-sync" ${SYNC_BUSY ? 'disabled' : ''}>${SYNC_BUSY ? 'Syncing…' : 'Sync now'}</button></div>`;
+}
+
+function renderLeague(el) {
+  const teams = leagueTeams(seasonVal);
+  const week = Object.fromEntries(leagueTeams(weekVal).map(t => [t.r.id, t.lu.total]));
+  const rows = teams.map((t, i) => `<button class="prow team-row ${t.r.mine ? 'me' : ''}" data-roster="${t.r.id}">
+      <span class="rk">${i + 1}</span><span class="who"><span><b>${esc(t.r.name)}${t.r.mine ? ' (you)' : ''}</b><small>${t.r.wins}-${t.r.losses}${t.r.ties ? '-' + t.r.ties : ''} · ${t.r.players.length} players · ${f1(week[t.r.id])} this week</small></span></span>
+      <span class="num">${f1(t.lu.total)}<small>pts/wk</small></span></button>`).join('');
+  el.innerHTML = `<div class="wrap">${pageTop('League', 'Power rankings')}${syncBar()}${teamSeg()}
+    <p class="small muted" style="margin:0 0 10px">Ranked by projected starting lineup for the rest of the season. Tap a team to see its roster.</p>
+    <div class="list">${rows}</div></div>`;
+}
+
+function openRoster(rid) {
+  const r = S.league.rosters.find(x => x.id === rid);
+  if (!r) return;
+  const lu = lineup(idsOf(r.players), weekVal);
+  openSheet(`<div class="sheet-top"><div><h2>${esc(r.name)}</h2><span class="muted small">${r.wins}-${r.losses}${r.ties ? '-' + r.ties : ''} · ${f1(lu.total)} pts this week</span></div><button class="icon-btn" data-act="sheet-close" aria-label="Close">${X_ICON}</button></div>
+    <h3>Starters</h3>${lineupList(lu, weekVal)}
+    ${lu.bench.length ? `<h3>Bench</h3><div class="list">${lu.bench.map(p => `<button class="prow simple" data-pid="${p.id}"><span class="who">${who(p)}</span><span class="num">${f1(weekVal(p))}</span></button>`).join('')}</div>` : ''}
+    ${r.mine ? '' : `<button class="btn grad" data-tradewith="${r.id}">Find trades with ${esc(r.name)}</button>`}`);
+}
+
+const teamSeg = () => S.league && S.league.rosters && S.league.rosters.length
+  ? `<div class="seg" style="margin-bottom:12px"><button class="${S.teamView !== 'league' ? 'on' : ''}" data-act="team-view" data-view="mine">My team</button><button class="${S.teamView === 'league' ? 'on' : ''}" data-act="team-view" data-view="league">League</button></div>` : '';
+
+// Compare the lineup set in Sleeper with the best one
+function sleeperLineupCard(lu) {
+  const r = myRoster();
+  if (!r || !r.starters.length || !hasLive()) return '';
+  const set = idsOf(r.starters);
+  const best = new Set(lu.slots.filter(x => x.p).map(x => x.p.id));
+  const start = [...best].filter(id => !set.includes(id)).map(id => BY_ID[id]);
+  const sit = set.filter(id => !best.has(id)).map(id => BY_ID[id]);
+  const gain = lu.total - sum(set.map(id => weekVal(BY_ID[id])));
+  if ((!start.length && !sit.length) || gain < .1) return `<div class="card"><h3 style="margin:0">✓ Your Sleeper lineup is optimal</h3><p class="muted small" style="margin:4px 0 0">Nothing to change for ${weekLabel()}.</p></div>`;
+  const names = list => list.map(p => `<b>${esc(p.name)}</b>${cantPlay(p) ? ' <span class="out">(' + (I(p).bye ? 'bye' : INJ_SHORT[p.inj] || 'out') + ')</span>' : ''}`).join(', ');
+  return `<div class="card fix"><h3 style="margin:0 0 6px">Fix your Sleeper lineup <span class="up">+${f1(gain)} pts</span></h3>
+    ${start.length ? `<p class="small" style="margin:0 0 4px">Start ${names(start)}</p>` : ''}
+    ${sit.length ? `<p class="small" style="margin:0">Bench ${names(sit)}</p>` : ''}
+    <p class="muted small" style="margin:6px 0 0">Make these changes in the Sleeper app.</p></div>`;
 }
 
 function renderTeam() {
   const el = $('#tab-team');
+  if (S.league && S.teamView === 'league' && S.league.rosters && S.league.rosters.length) { renderLeague(el); return; }
   if (!S.team.length) {
-    el.innerHTML = `<div class="wrap">${pageTop('My Team', 'Lineups and team strength')}
-      <div class="card" style="text-align:center"><h3>Build your roster</h3>
-        <p class="muted small">Add your players, or connect your Sleeper league in settings, to get an optimal weekly lineup, a team grade and trade impact.</p>
-        <div class="actions"><button class="btn grad" data-act="add-team">Add players</button>
-        <button class="btn ghost" data-tab="draft">Draft one in a mock draft</button></div></div></div>`;
+    el.innerHTML = `<div class="wrap">${pageTop('My Team', 'Lineups and team strength')}${S.league ? syncBar() : ''}
+      ${S.league ? (SYNC_BUSY ? '<p class="empty">Syncing your Sleeper roster…</p>' : '<div class="card"><h3>No players found</h3><p class="muted small">Your Sleeper roster came back empty. Tap Sync now, or check you picked the right league in settings.</p></div>')
+        : `<h3>Connect your Sleeper league</h3>${leagueSection()}
+      <div class="card" style="text-align:center"><h3>Or build it by hand</h3>
+        <div class="actions"><button class="btn ghost" data-act="add-team">Add players</button>
+        <button class="btn ghost" data-tab="draft">Draft one in a mock draft</button></div></div>`}</div>`;
     return;
   }
-  const M = model();
   const lu = lineup(S.team, weekVal);
-  const ratio = lu.total / (M.avgTotal / 17);
-  const bars = ['QB', 'RB', 'WR', 'TE', 'FLEX', 'K', 'DST'].map(pos => {
-    const filled = lu.slots.filter(s => s.slot === pos);
-    const r = sum(filled.map(s => s.p ? weekVal(s.p) : 0)) / (M.avg[pos] / 17 * filled.length);
-    return `<div class="bar-row"><span class="pos ${pos}">${pos}</span><div class="meter"><span class="${r < .95 ? 'lo' : ''}" style="width:${Math.min(100, r * 70).toFixed(0)}%"></span></div><b>${Math.round(r * 100)}%</b></div>`;
+  const slots = curSlots();
+  const ratio = lu.total / (sum(slots.map(avgFor)) / 17);
+  const bars = [...new Set(slots)].map(slot => {
+    const filled = lu.slots.filter(x => x.slot === slot);
+    const r = sum(filled.map(x => x.p ? weekVal(x.p) : 0)) / (avgFor(slot) / 17 * filled.length);
+    const label = SLOT_LABEL[slot] || slot;
+    return `<div class="bar-row"><span class="pos ${SLOT_LABEL[slot] ? 'FLEX' : slot}">${label}</span><div class="meter"><span class="${r < .95 ? 'lo' : ''}" style="width:${Math.min(100, r * 70).toFixed(0)}%"></span></div><b>${Math.round(r * 100)}%</b></div>`;
   }).join('');
-  const weak = lu.slots.filter(s => !s.p).length;
+  const weak = lu.slots.filter(x => !x.p).length;
+  let place = '';
+  if (S.league && S.league.rosters && S.league.rosters.length > 1) {
+    const order = leagueTeams(weekVal);
+    const i = order.findIndex(t => t.r.mine);
+    if (i >= 0) place = ` ${ordinal(i + 1)} of ${order.length} in your league this week.`;
+  }
 
-  const synced = S.league ? `<p class="small muted" style="margin:-4px 0 12px">Synced from ${esc(S.league.name)} on Sleeper${S.league.missing ? ` · ${S.league.missing} player${S.league.missing > 1 ? 's' : ''} couldn't be matched` : ''}.</p>` : '';
-  el.innerHTML = `<div class="wrap">${pageTop('My Team', weekLabel() + ' lineup')}${synced}
+  el.innerHTML = `<div class="wrap">${pageTop('My Team', weekLabel() + ' lineup')}${S.league ? syncBar() : ''}${teamSeg()}
     <div class="hero"><div class="grade">${letter(ratio)}</div><div class="eyebrow">Team strength</div>
       <h2>${f1(lu.total)} pts / week</h2>
-      <p>${Math.round(ratio * 100)}% of an average ${S.teams}-team starting lineup.${weak ? ` ${weak} empty slot${weak > 1 ? 's' : ''}.` : ''}</p></div>
+      <p>${Math.round(ratio * 100)}% of an average ${S.teams}-team starting lineup.${place}${weak ? ` ${weak} empty slot${weak > 1 ? 's' : ''}.` : ''}</p></div>
+    ${sleeperLineupCard(lu)}
     <h3>Optimal lineup</h3>${lineupList(lu, weekVal)}
     ${lu.bench.length ? `<h3>Bench</h3><div class="list">${lu.bench.map(p => `<button class="prow simple" data-pid="${p.id}"><span class="who">${who(p)}</span><span class="num">${f1(weekVal(p))}</span></button>`).join('')}</div>` : ''}
     <div class="card"><h3>Strength by slot</h3><p class="muted small">Compared with an average starter. 100% is league average.</p>${bars}</div>
@@ -914,15 +1130,21 @@ function liveStatus() {
   return t;
 }
 
+function syncText() {
+  if (SYNC_BUSY) return 'Syncing…';
+  if (SYNC_ERR) return `<span class="out">${esc(SYNC_ERR)}</span>`;
+  return S.league.syncedAt ? 'Synced ' + ago(S.league.syncedAt) : 'Not synced yet';
+}
+
 function leagueSection() {
   const L = S.league;
   const err = LEAGUE_ERR ? `<p class="small out" style="margin:8px 0 0">${esc(LEAGUE_ERR)}</p>` : '';
-  if (L) return `<div class="card"><b>${esc(L.name)}</b><p class="muted small" style="margin:2px 0 12px">${L.teams} teams · ${L.mine.length} players on your roster${L.missing ? ` (${L.missing} not matched)` : ''}</p>
-    <div class="row-btns" style="margin:0"><button class="btn ghost sm" data-act="live-refresh" ${LIVE_BUSY ? 'disabled' : ''}>Sync roster</button><button class="btn ghost sm danger" data-act="league-off">Disconnect</button></div>${err}</div>`;
+  if (L) return `<div class="card"><b>${esc(L.name)}</b><p class="muted small" style="margin:2px 0 12px">${L.teams} teams · ${L.mine.length} players on your roster${L.missing ? ` (${L.missing} not matched)` : ''} · ${syncText()}</p>
+    <div class="row-btns" style="margin:0"><button class="btn ghost sm" data-act="league-sync" ${SYNC_BUSY ? 'disabled' : ''}>Sync now</button><button class="btn ghost sm danger" data-act="league-off">Disconnect</button></div>${err}</div>`;
   if (LEAGUES) return `<div class="card"><p class="muted small">Pick your ${esc(LEAGUES.season)} league:</p><div class="actions">
     ${LEAGUES.leagues.map((lg, i) => `<button class="btn ghost sm" data-league="${i}" ${LEAGUE_BUSY ? 'disabled' : ''}>${esc(lg.name)} · ${lg.total_rosters || '?'} teams</button>`).join('')}
     <button class="btn sm" data-act="league-cancel" style="background:transparent;color:var(--muted)">Cancel</button></div>${err}</div>`;
-  return `<div class="card"><p class="muted small">Sync My Team, scoring and league size, and see who's available on waivers.</p>
+  return `<div class="card"><p class="muted small">Sync your roster, every team in your league, scoring and lineup settings. Find your username in the Sleeper app under your profile.</p>
     <div style="display:flex;gap:8px"><input class="search" id="sl-user" placeholder="Sleeper username" value="${esc(SL_USER)}" autocomplete="off" autocapitalize="off" style="margin:0">
     <button class="btn grad sm" data-act="find-leagues" style="width:auto" ${LEAGUE_BUSY ? 'disabled' : ''}>${LEAGUE_BUSY ? '…' : 'Connect'}</button></div>${err}</div>`;
 }
@@ -942,12 +1164,18 @@ function openMenu() {
 
 function refreshMenu() { if (!$('#menu').classList.contains('hidden')) openMenu(); }
 
+// The connect form also appears on My Team and Trade
+function refreshLeagueUI() {
+  refreshMenu();
+  if (['team', 'trade'].includes(S.tab)) render();
+}
+
 async function findLeaguesFromInput() {
   if (!SL_USER.trim() || LEAGUE_BUSY) return;
-  LEAGUE_BUSY = true; LEAGUE_ERR = ''; refreshMenu();
+  LEAGUE_BUSY = true; LEAGUE_ERR = ''; refreshLeagueUI();
   try { await findLeagues(SL_USER); }
-  catch (e) { LEAGUE_ERR = e instanceof TypeError ? "Couldn't reach Sleeper. Check your connection." : e.message; }
-  LEAGUE_BUSY = false; refreshMenu();
+  catch (e) { LEAGUE_ERR = errText(e); }
+  LEAGUE_BUSY = false; refreshLeagueUI();
 }
 
 /* ---------- Events ---------- */
@@ -971,6 +1199,16 @@ document.addEventListener('click', e => {
     return;
   }
   if (ds.pid) { openPlayer(ds.pid); return; }
+  if (ds.roster) { openRoster(+ds.roster); return; }
+  if (ds.tradewith !== undefined) { TRADE_WITH = +ds.tradewith; S.tab = 'trade'; save(); closeSheet(); render(); return; }
+  if (ds.idea !== undefined) {
+    const x = IDEAS && IDEAS[+ds.idea];
+    if (x) {
+      S.give = x.give.slice(); S.get = x.get.slice(); save(); renderTrade();
+      const a = $('#analyzer'); if (a) a.scrollIntoView({ behavior: 'smooth' });
+    }
+    return;
+  }
   if (ds.sa) {
     const [k, id] = ds.sa.split(':');
     if (k === 'team') {
@@ -996,9 +1234,9 @@ document.addEventListener('click', e => {
   if (ds.league) {
     const lg = LEAGUES && LEAGUES.leagues[+ds.league];
     if (!lg || LEAGUE_BUSY) return;
-    LEAGUE_BUSY = true; LEAGUE_ERR = ''; refreshMenu();
+    LEAGUE_BUSY = true; LEAGUE_ERR = ''; refreshLeagueUI();
     connectLeague(lg)
-      .catch(err => { S.league = null; LEAGUE_ERR = err instanceof TypeError ? "Couldn't reach Sleeper. Check your connection." : err.message; })
+      .catch(err => { S.league = null; LEAGUE_ERR = errText(err); })
       .finally(() => { LEAGUE_BUSY = false; render(); refreshMenu(); });
     return;
   }
@@ -1017,7 +1255,9 @@ document.addEventListener('click', e => {
     case 'menu': openMenu(); break;
     case 'live-refresh': refreshLive(); break;
     case 'find-leagues': findLeaguesFromInput(); break;
-    case 'league-cancel': LEAGUES = null; LEAGUE_ERR = ''; refreshMenu(); break;
+    case 'league-cancel': LEAGUES = null; LEAGUE_ERR = ''; refreshLeagueUI(); break;
+    case 'league-sync': syncLeague(true); break;
+    case 'team-view': S.teamView = ds.view; save(); renderTeam(); break;
     case 'league-off':
       if (confirm('Disconnect your Sleeper league? My Team stays as it is.')) {
         S.league = null; S.availOnly = false; applyLive(); cleanIds(); save(); render(); refreshMenu();
@@ -1078,10 +1318,12 @@ document.addEventListener('keydown', e => {
 applyLive();
 cleanIds();
 render();
-if (Date.now() - (LIVE && LIVE.at || 0) > LIVE_MAX_AGE) refreshLive();
-document.addEventListener('visibilitychange', () => {
-  if (document.visibilityState === 'visible' && Date.now() - (LIVE && LIVE.at || 0) > LIVE_MAX_AGE) refreshLive();
-});
+function checkFresh() {
+  if (Date.now() - (LIVE && LIVE.at || 0) > LIVE_MAX_AGE) refreshLive();
+  else syncLeague();
+}
+checkFresh();
+document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') checkFresh(); });
 
 if ('serviceWorker' in navigator && location.protocol.startsWith('http')) {
   window.addEventListener('load', () => navigator.serviceWorker.register('sw.js', { updateViaCache: 'none' }).catch(() => {}));
