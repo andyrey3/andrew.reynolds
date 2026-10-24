@@ -1,6 +1,6 @@
 // Caches the app shell so it opens offline. Your team, drafts and settings
 // live in localStorage on the device and are never touched by the service worker.
-const CACHE = 'huddle-v1';
+const CACHE = 'huddle-v2';
 const ASSETS = [
   './',
   './index.html',
@@ -28,9 +28,12 @@ self.addEventListener('activate', e => {
 self.addEventListener('fetch', e => {
   if (e.request.method !== 'GET') return;
 
+  // Live data from Sleeper always goes straight to the network
+  const url = new URL(e.request.url);
+  if (url.origin !== location.origin) return;
+
   // Page and scripts: always ask the network (skipping the browser's HTTP
   // cache) so updates show up right away; fall back to the saved copy offline
-  const url = new URL(e.request.url);
   if (e.request.mode === 'navigate' || (url.origin === location.origin && url.pathname.endsWith('.js'))) {
     const key = e.request.mode === 'navigate' ? './index.html' : e.request;
     e.respondWith(
