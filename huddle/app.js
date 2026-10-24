@@ -7,16 +7,27 @@ const DEFAULTS = {
   fmt: 'half', teams: 12, tab: 'rank', rankPos: 'ALL',
   team: [], out: [], ss: [], ssAdj: {}, ssNeed: 'balanced',
   give: [], get: [], draft: null, setup: { teams: 12, slot: 0 },
-  rankMode: 'season', availOnly: false, league: null, teamView: 'mine'
+  rankMode: 'season', availOnly: false, teamView: 'mine',
+  leagues: [], activeLeague: null, sleeperUser: null
 };
 let S = load();
 
+// S.league is the active entry of S.leagues; it's rebuilt on load, not saved
 function load() {
   const fresh = JSON.parse(JSON.stringify(DEFAULTS));
-  try { return Object.assign(fresh, JSON.parse(localStorage.getItem(KEY)) || {}); }
-  catch { return fresh; }
+  let st;
+  try { st = Object.assign(fresh, JSON.parse(localStorage.getItem(KEY)) || {}); }
+  catch { st = fresh; }
+  // Older versions kept a single league
+  if (st.league && !st.leagues.length) { st.leagues = [st.league]; st.activeLeague = st.league.id; }
+  if (!st.sleeperUser && st.leagues.length) st.sleeperUser = { id: st.leagues[0].userId, name: '' };
+  st.league = st.leagues.find(l => l.id === st.activeLeague) || st.leagues[0] || null;
+  st.activeLeague = st.league && st.league.id;
+  return st;
 }
-function save() { try { localStorage.setItem(KEY, JSON.stringify(S)); } catch {} }
+function save() {
+  try { const { league, ...rest } = S; localStorage.setItem(KEY, JSON.stringify(rest)); } catch {}
+}
 
 const $ = s => document.querySelector(s);
 const esc = s => String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -229,6 +240,7 @@ let SYNC_BUSY = false, SYNC_ERR = '';
 async function syncLeague(force) {
   if (!S.league || SYNC_BUSY || LIVE_BUSY) return;
   if (!force && Date.now() - (S.league.syncedAt || 0) < LEAGUE_MAX_AGE) return;
+  const L = S.league;
   SYNC_BUSY = true; SYNC_ERR = '';
   refreshLeagueUI();
   try {
@@ -241,6 +253,8 @@ async function syncLeague(force) {
   SYNC_BUSY = false;
   render();
   refreshMenu();
+  // Switched leagues while this one was syncing: sync the new one too
+  if (S.league && S.league !== L) syncLeague();
 }
 
 const idsOf = sids => sids.map(sid => SID[sid] && SID[sid].id).filter(Boolean);
@@ -294,23 +308,56 @@ async function refreshLive() {
 async function findLeagues(username) {
   const user = await getJSON('/v1/user/' + encodeURIComponent(username.trim()));
   if (!user || !user.user_id) throw new Error(`No Sleeper user named "${username.trim()}".`);
+  S.sleeperUser = { id: user.user_id, name: user.display_name || username.trim() };
+  save();
+  await listLeagues();
+}
+
+// Your leagues this season that aren't added yet
+async function listLeagues() {
   const season = LIVE && LIVE.season || String(new Date().getFullYear());
-  const leagues = await getJSON(`/v1/user/${user.user_id}/leagues/nfl/${season}`) || [];
-  if (!leagues.length) throw new Error(`${user.display_name || username} has no ${season} leagues.`);
-  LEAGUES = { userId: user.user_id, season, leagues };
+  const all = await getJSON(`/v1/user/${S.sleeperUser.id}/leagues/nfl/${season}`) || [];
+  if (!all.length) throw new Error(`${S.sleeperUser.name || 'This account'} has no ${season} leagues.`);
+  const added = new Set(S.leagues.map(l => l.id));
+  const leagues = all.filter(lg => !added.has(lg.league_id));
+  if (!leagues.length) throw new Error(`All your ${season} leagues are already added.`);
+  LEAGUES = { userId: S.sleeperUser.id, season, leagues };
 }
 
 async function connectLeague(lg) {
   const rec = lg.scoring_settings && lg.scoring_settings.rec || 0;
-  S.league = { id: lg.league_id, name: lg.name, userId: LEAGUES.userId, teams: lg.total_rosters || 12, size: 15, slots: toSlots(lg.roster_positions || []), mine: [], rostered: [], rosters: [] };
-  await fetchRosters(true);
-  S.fmt = rec >= 1 ? 'ppr' : rec >= .5 ? 'half' : 'std';
-  S.teams = S.league.teams;
+  const prev = S.league;
+  S.league = { id: lg.league_id, name: lg.name, userId: LEAGUES.userId, teams: lg.total_rosters || 12, size: 15, slots: toSlots(lg.roster_positions || []), mine: [], rostered: [], rosters: [], fmt: rec >= 1 ? 'ppr' : rec >= .5 ? 'half' : 'std' };
+  try { await fetchRosters(true); }
+  catch (e) { S.league = prev; throw e; }
+  S.leagues = S.leagues.filter(l => l.id !== S.league.id).concat(S.league);
   LEAGUES = null;
+  useLeague(S.league.id);
+}
+
+// Make a league the active one: its roster, scoring and size
+function useLeague(id) {
+  const L = S.leagues.find(l => l.id === id);
+  if (!L) return;
+  S.league = L;
+  S.activeLeague = L.id;
+  if (L.fmt) S.fmt = L.fmt;
+  S.teams = L.teams;
+  TRADE_WITH = 0;
   applyLive();
-  applyLeagueTeam();
+  if (L.rosters) applyLeagueTeam();
   cleanIds();
   save();
+  render();
+  refreshMenu();
+  syncLeague();
+}
+
+function removeLeague() {
+  S.leagues = S.leagues.filter(l => l.id !== S.league.id);
+  S.league = null; S.activeLeague = null; S.availOnly = false;
+  if (S.leagues.length) { useLeague(S.leagues[0].id); return; }
+  applyLive(); cleanIds(); save(); render(); refreshMenu();
 }
 
 // Drop saved ids for players that no longer exist
@@ -626,6 +673,7 @@ function renderWaiver() {
 
   $('#tab-waiver').innerHTML = `<div class="wrap">
     ${pageTop('Waiver Wire', weekLabel() + ' · free agents')}
+    ${S.league ? syncBar() : ''}
     <p class="small muted" style="margin:-4px 0 14px">${source}</p>
     ${S.team.length ? `<h3>Top pickups for you</h3>${picks}` : `<div class="card"><h3>Get pickups picked for you</h3><p class="muted small">Add your roster on My Team${S.league ? '' : ' or connect your Sleeper league'} to see who improves your lineup, who to drop and what to bid.</p><button class="btn ghost sm" data-tab="team">Go to My Team</button></div>`}
     <h3 style="margin-top:18px">Best available</h3>
@@ -702,7 +750,7 @@ let TRADE_WITH = 0, IDEAS = null, IDEAS_KEY = '';
 // don't hurt theirs, and are close enough in value that they might accept
 function tradeIdeas() {
   model();
-  const key = [MKEY, S.league.syncedAt, S.team.join()].join('|');
+  const key = [MKEY, S.league.id, S.league.syncedAt, S.team.join()].join('|');
   if (IDEAS && IDEAS_KEY === key) return IDEAS;
   const mine = S.team;
   const myBase = lineup(mine, seasonVal).total;
@@ -994,7 +1042,9 @@ function leagueTeams(val) {
 
 function syncBar() {
   const L = S.league;
-  return `<div class="sync"><span>${esc(L.name)} · ${syncText()}${L.missing ? ` · ${L.missing} player${L.missing > 1 ? 's' : ''} not matched` : ''}</span>
+  const switcher = S.leagues.length > 1
+    ? `<div class="chips">${S.leagues.map(l => `<button class="chip ${l.id === L.id ? 'on' : ''}" data-useleague="${esc(l.id)}">${esc(l.name)}</button>`).join('')}</div>` : '';
+  return `${switcher}<div class="sync"><span>${esc(L.name)} · ${syncText()}${L.missing ? ` · ${L.missing} player${L.missing > 1 ? 's' : ''} not matched` : ''}</span>
     <button class="pill" data-act="league-sync" ${SYNC_BUSY ? 'disabled' : ''}>${SYNC_BUSY ? 'Syncing…' : 'Sync now'}</button></div>`;
 }
 
@@ -1158,7 +1208,7 @@ function addTo(key, id) {
   S[key].push(id);
 }
 
-let SL_USER = '', LEAGUE_BUSY = false, LEAGUE_ERR = '';
+let SL_USER = S.sleeperUser && S.sleeperUser.name || '', LEAGUE_BUSY = false, LEAGUE_ERR = '';
 
 function ago(t) {
   const m = Math.round((Date.now() - t) / 6e4);
@@ -1185,11 +1235,15 @@ function syncText() {
 function leagueSection() {
   const L = S.league;
   const err = LEAGUE_ERR ? `<p class="small out" style="margin:8px 0 0">${esc(LEAGUE_ERR)}</p>` : '';
-  if (L) return `<div class="card"><b>${esc(L.name)}</b><p class="muted small" style="margin:2px 0 12px">${L.teams} teams · ${L.mine.length} players on your roster${L.missing ? ` (${L.missing} not matched)` : ''} · ${syncText()}</p>
-    <div class="row-btns" style="margin:0"><button class="btn ghost sm" data-act="league-sync" ${SYNC_BUSY ? 'disabled' : ''}>Sync now</button><button class="btn ghost sm danger" data-act="league-off">Disconnect</button></div>${err}</div>`;
-  if (LEAGUES) return `<div class="card"><p class="muted small">Pick your ${esc(LEAGUES.season)} league:</p><div class="actions">
+  if (LEAGUES) return `<div class="card"><p class="muted small">Pick ${S.leagues.length ? 'another' : 'your'} ${esc(LEAGUES.season)} league:</p><div class="actions">
     ${LEAGUES.leagues.map((lg, i) => `<button class="btn ghost sm" data-league="${i}" ${LEAGUE_BUSY ? 'disabled' : ''}>${esc(lg.name)} · ${lg.total_rosters || '?'} teams</button>`).join('')}
     <button class="btn sm" data-act="league-cancel" style="background:transparent;color:var(--muted)">Cancel</button></div>${err}</div>`;
+  if (L) return `${S.leagues.length > 1 ? `<div class="card"><p class="muted small">Your leagues</p><div class="actions">${S.leagues.map(l => l.id === L.id
+      ? `<div class="league-on"><b>${esc(l.name)}</b><span class="badge start">Active</span></div>`
+      : `<button class="btn ghost sm" data-useleague="${esc(l.id)}">Switch to ${esc(l.name)}</button>`).join('')}</div></div>` : ''}
+    <div class="card"><b>${esc(L.name)}</b><p class="muted small" style="margin:2px 0 12px">${L.teams} teams · ${L.mine.length} players on your roster${L.missing ? ` (${L.missing} not matched)` : ''} · ${syncText()}</p>
+    <div class="row-btns" style="margin:0"><button class="btn ghost sm" data-act="league-sync" ${SYNC_BUSY ? 'disabled' : ''}>Sync now</button><button class="btn ghost sm danger" data-act="league-off">Remove</button></div></div>
+    <button class="btn dashed" data-act="add-league" ${LEAGUE_BUSY ? 'disabled' : ''}>${LEAGUE_BUSY ? 'Finding your leagues…' : '+ Add another league'}</button>${err}`;
   return `<div class="card"><p class="muted small">Sync your roster, every team in your league, scoring and lineup settings. Find your username in the Sleeper app under your profile.</p>
     <div style="display:flex;gap:8px"><input class="search" id="sl-user" placeholder="Sleeper username" value="${esc(SL_USER)}" autocomplete="off" autocapitalize="off" style="margin:0">
     <button class="btn grad sm" data-act="find-leagues" style="width:auto" ${LEAGUE_BUSY ? 'disabled' : ''}>${LEAGUE_BUSY ? '…' : 'Connect'}</button></div>${err}</div>`;
@@ -1214,6 +1268,14 @@ function refreshMenu() { if (!$('#menu').classList.contains('hidden')) openMenu(
 function refreshLeagueUI() {
   refreshMenu();
   if (['team', 'trade'].includes(S.tab)) render();
+}
+
+async function addLeague() {
+  if (LEAGUE_BUSY || !S.sleeperUser) return;
+  LEAGUE_BUSY = true; LEAGUE_ERR = ''; refreshLeagueUI();
+  try { await listLeagues(); }
+  catch (e) { LEAGUE_ERR = errText(e); }
+  LEAGUE_BUSY = false; refreshLeagueUI();
 }
 
 async function findLeaguesFromInput() {
@@ -1277,12 +1339,13 @@ document.addEventListener('click', e => {
     S.out = S.out.filter(x => x !== drop);
     save(); renderWaiver(); return;
   }
+  if (ds.useleague) { useLeague(ds.useleague); return; }
   if (ds.league) {
     const lg = LEAGUES && LEAGUES.leagues[+ds.league];
     if (!lg || LEAGUE_BUSY) return;
     LEAGUE_BUSY = true; LEAGUE_ERR = ''; refreshLeagueUI();
     connectLeague(lg)
-      .catch(err => { S.league = null; LEAGUE_ERR = errText(err); })
+      .catch(err => { LEAGUE_ERR = errText(err); })
       .finally(() => { LEAGUE_BUSY = false; render(); refreshMenu(); });
     return;
   }
@@ -1305,10 +1368,9 @@ document.addEventListener('click', e => {
     case 'league-sync': syncLeague(true); break;
     case 'team-view': S.teamView = ds.view; save(); renderTeam(); break;
     case 'league-off':
-      if (confirm('Disconnect your Sleeper league? My Team stays as it is.')) {
-        S.league = null; S.availOnly = false; applyLive(); cleanIds(); save(); render(); refreshMenu();
-      }
+      if (confirm(`Remove ${S.league.name} from Huddle? You can add it again any time.`)) removeLeague();
       break;
+    case 'add-league': addLeague(); break;
     case 'avail': S.availOnly = !S.availOnly; save(); renderRank(); break;
     case 'menu-close': show($('#menu'), false); break;
     case 'sheet-close': closeSheet(); break;
