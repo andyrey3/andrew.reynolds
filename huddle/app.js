@@ -34,7 +34,7 @@ const esc = s => String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;'
 const f1 = n => n.toFixed(1);
 const sum = a => a.reduce((s, x) => s + x, 0);
 const X_ICON = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M6 6l12 12M18 6 6 18"/></svg>';
-const GEAR = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M4 7h10M18 7h2M4 17h4M12 17h8"/><circle cx="16" cy="7" r="2"/><circle cx="10" cy="17" r="2"/></svg>';
+const GEAR = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg>';
 
 const FMT = { ppr: 'PPR', half: 'Half PPR', std: 'Standard' };
 const POS = ['QB', 'RB', 'WR', 'TE', 'K', 'DST'];
@@ -491,7 +491,7 @@ function letter(r) {
 
 function pageTop(title, sub) {
   return `<div class="top"><div><div class="eyebrow">${esc(sub)}</div><h1>${esc(title)}</h1></div>
-    <button class="pill" data-act="menu">${GEAR}${FMT[S.fmt]} · ${S.teams}T</button></div>`;
+    <button class="pill" data-act="menu" aria-label="Settings">${GEAR}Settings</button></div>`;
 }
 
 function who(p, extra = '') {
@@ -1042,8 +1042,9 @@ function leagueTeams(val) {
 
 function syncBar() {
   const L = S.league;
-  const switcher = S.leagues.length > 1
-    ? `<div class="chips">${S.leagues.map(l => `<button class="chip ${l.id === L.id ? 'on' : ''}" data-useleague="${esc(l.id)}">${esc(l.name)}</button>`).join('')}</div>` : '';
+  // Your leagues, plus a way to add another, right where you look at them
+  const switcher = `<div class="chips">${S.leagues.map(l => `<button class="chip ${l.id === L.id ? 'on' : ''}" data-useleague="${esc(l.id)}">${esc(l.name)}</button>`).join('')}
+    <button class="chip add" data-act="add-league-open">+ Add league</button></div>`;
   return `${switcher}<div class="sync"><span>${esc(L.name)} · ${syncText()}${L.missing ? ` · ${L.missing} player${L.missing > 1 ? 's' : ''} not matched` : ''}</span>
     <button class="pill" data-act="league-sync" ${SYNC_BUSY ? 'disabled' : ''}>${SYNC_BUSY ? 'Syncing…' : 'Sync now'}</button></div>`;
 }
@@ -1371,6 +1372,7 @@ document.addEventListener('click', e => {
       if (confirm(`Remove ${S.league.name} from Huddle? You can add it again any time.`)) removeLeague();
       break;
     case 'add-league': addLeague(); break;
+    case 'add-league-open': openMenu(); addLeague(); break;
     case 'avail': S.availOnly = !S.availOnly; save(); renderRank(); break;
     case 'menu-close': show($('#menu'), false); break;
     case 'sheet-close': closeSheet(); break;
