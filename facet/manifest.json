@@ -1,0 +1,15 @@
+{
+  "name": "Facet — Face Analysis",
+  "short_name": "Facet",
+  "description": "Rate your facial features, see your proportions and get a plan to look your best",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#f5f4fa",
+  "theme_color": "#f5f4fa",
+  "orientation": "portrait",
+  "icons": [
+    { "src": "icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any maskable" },
+    { "src": "icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any maskable" }
+  ]
+}
