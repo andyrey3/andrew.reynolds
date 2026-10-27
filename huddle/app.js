@@ -496,7 +496,7 @@ function pageTop(title, sub) {
 
 function who(p, extra = '') {
   const m = I(p);
-  const tags = [p.team];
+  const tags = [esc(p.team)];
   if (m.bye) tags.push('<span class="out">Bye</span>');
   else if (m.opp) tags.push('v ' + esc(m.opp));
   if (p.inj && INJ_SHORT[p.inj]) tags.push(`<span class="${p.inj === 'Questionable' ? 'q' : 'out'}">${INJ_SHORT[p.inj]}</span>`);
@@ -964,7 +964,7 @@ function renderDraft() {
   }).reverse().join('');
 
   const recs = mine ? recommend(d).map(p => `<div class="rec"><span class="pos ${p.pos}">${p.pos}${I(p).posRank}</span>
-    <b>${esc(p.name)}</b><small>${p.team} · ADP ${I(p).adp}</small><button class="draft-btn" data-draftpick="${p.id}">Draft</button></div>`).join('') : '';
+    <b>${esc(p.name)}</b><small>${esc(p.team)} · ADP ${I(p).adp}</small><button class="draft-btn" data-draftpick="${p.id}">Draft</button></div>`).join('') : '';
 
   const taken = new Set(d.picks);
   const q = DQ.trim().toLowerCase();
