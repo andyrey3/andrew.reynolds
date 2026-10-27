@@ -734,9 +734,30 @@ let S = load();
 function load() {
   try {
     const raw = localStorage.getItem(KEY);
-    if (raw) return Object.assign({}, DEFAULTS, JSON.parse(raw));
+    if (raw) return clean(JSON.parse(raw));
   } catch (e) {}
-  return Object.assign({}, DEFAULTS, { xpByDay: {}, done: {}, chests: {} });
+  return clean({});
+}
+// Saved data and backup codes can come from anyone, so keep only the fields
+// a real save has, with the right types. Anything else is dropped.
+function clean(d) {
+  const out = Object.assign({}, DEFAULTS, { xpByDay: {}, done: {}, chests: {} });
+  if (!d || typeof d !== 'object') return out;
+  for (const k of ['goal', 'xp', 'gems', 'hearts', 'heartsTs', 'streak', 'longest', 'freezes', 'lessons', 'perfect']) {
+    if (Number.isFinite(d[k])) out[k] = Math.max(0, Math.floor(d[k]));
+  }
+  out.hearts = Math.min(out.hearts, MAX_HEARTS);
+  out.freezes = Math.min(out.freezes, 2);
+  if (typeof d.started === 'boolean') out.started = d.started;
+  if (typeof d.sound === 'boolean') out.sound = d.sound;
+  if (typeof d.lastDay === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(d.lastDay)) out.lastDay = d.lastDay;
+  for (const k of ['xpByDay', 'done', 'chests']) {
+    if (!d[k] || typeof d[k] !== 'object') continue;
+    for (const [id, v] of Object.entries(d[k])) {
+      if (/^[\w-]{1,40}$/.test(id) && (Number.isFinite(v) || typeof v === 'boolean')) out[k][id] = v;
+    }
+  }
+  return out;
 }
 function save() {
   try { localStorage.setItem(KEY, JSON.stringify(S)); } catch (e) { toast('Could not save progress on this device'); }
@@ -1118,7 +1139,7 @@ function importSheet() {
     try {
       const data = JSON.parse(decodeURIComponent(escape(atob(o.querySelector('#im').value.trim()))));
       if (typeof data !== 'object' || !data || typeof data.xp !== 'number') throw new Error('bad');
-      S = Object.assign({}, DEFAULTS, data, { started: true });
+      S = Object.assign(clean(data), { started: true });
       save(); closeSheet(); toast('Progress restored ✅'); syncStreak(); goHome('learn');
     } catch (e) { toast('That code doesn’t look right'); }
   };

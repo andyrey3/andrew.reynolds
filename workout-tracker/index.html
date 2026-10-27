@@ -810,14 +810,33 @@
       saveState();
     }
 
+    // Saved data and backup files can come from anyone, so fields that end
+    // up in the page as markup or attributes only keep known-safe values
     function normalize(s) {
       const d = defaultState();
+      const set = { ...d.settings, ...(s.settings && typeof s.settings === 'object' ? s.settings : {}) };
+      const settings = {
+        unit: set.unit === 'kg' ? 'kg' : 'lb',
+        rest: Number.isFinite(+set.rest) && +set.rest > 0 ? +set.rest : d.settings.rest,
+        bw: Number.isFinite(+set.bw) && +set.bw > 0 ? +set.bw : null,
+        sex: set.sex === 'female' ? 'female' : 'male'
+      };
+      const sessions = (Array.isArray(s.sessions) ? s.sessions : [])
+        .filter(x => x && typeof x === 'object')
+        .map(x => ({
+          ...x,
+          id: typeof x.id === 'string' && /^[a-z0-9]{1,40}$/i.test(x.id) ? x.id : uid(),
+          ex: x.ex && typeof x.ex === 'object' ? x.ex : {},
+          prs: Array.isArray(x.prs) ? x.prs : []
+        }));
       return {
         ...d,
         ...s,
-        sessions: Array.isArray(s.sessions) ? s.sessions : [],
+        version: 2,
+        dayType: ['upper', 'lower', 'rest'].includes(s.dayType) ? s.dayType : d.dayType,
+        sessions,
         drafts: s.drafts && typeof s.drafts === 'object' ? s.drafts : {},
-        settings: { ...d.settings, ...(s.settings || {}) }
+        settings
       };
     }
 
