@@ -668,6 +668,12 @@ async function importUrl(url) {
 function sheetEditor(r) {
   const isNew = !r || !r.id;
   r = { emoji: EMOJIS[Math.floor(Math.random() * EMOJIS.length)], color: COLORS[Math.floor(Math.random() * COLORS.length)], meal: 'dinner', time: 30, cost: 2, servings: 4, diet: [], cuisine: '', ingredients: [], steps: [], notes: '', source: '', photo: '', ...r };
+  // Imported data hasn't been through cleanRecipe yet, so coerce anything rendered unescaped
+  r.time = clampInt(r.time, 0, 1440, 30); r.servings = clampInt(r.servings, 1, 50, 4); r.cost = clampInt(r.cost, 1, 3, 2);
+  if (!MEALS.includes(r.meal)) r.meal = 'dinner';
+  if (!/^#[0-9a-f]{6}$/i.test(r.color)) r.color = COLORS[0];
+  r.photo = safePhoto(r.photo); r.source = safeUrl(r.source || '');
+  r.diet = (Array.isArray(r.diet) ? r.diet : []).filter(d => d in DIETS);
   const lines = r.ingredients.map(i => ingLine(i));
   U.editor = { id: isNew ? null : r.id, photo: r.photo, diet: [...r.diet], aisles: Object.fromEntries(r.ingredients.map((i, n) => [lines[n], i[3]])), emoji: r.emoji, color: r.color };
   openSheet(`
