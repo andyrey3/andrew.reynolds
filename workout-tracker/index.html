@@ -67,8 +67,9 @@
       background: none;
       border: none;
       border-radius: 8px;
-      padding: 8px 4px;
-      font-size: 0.875rem;
+      padding: 8px 2px;
+      font-size: 0.78rem;
+      white-space: nowrap;
       font-weight: 600;
       color: var(--muted);
       cursor: pointer;
@@ -543,13 +544,16 @@
           <button data-day="upper" class="upper">Upper</button>
           <button data-day="lower" class="lower">Lower</button>
           <button data-day="rest" class="rest">Rest</button>
+          <button data-day="upper2" class="upper">Upper 2</button>
+          <button data-day="lower2" class="lower">Lower 2</button>
+          <button data-day="rest2" class="rest">Rest</button>
         </div>
       </header>
 
       <div id="rest-view" class="rest-msg" style="display:none">
         <h2>Rest Day 😴</h2>
-        <p>Recovery is part of the process.<br>Next up: Upper.</p>
-        <button class="btn btn-primary" id="rest-done-btn">Rest done → start Upper</button>
+        <p>Recovery is part of the process.<br>Next up: <span id="rest-next">Upper</span>.</p>
+        <button class="btn btn-primary" id="rest-done-btn">Rest done → start <span id="rest-next-btn">Upper</span></button>
       </div>
 
       <div id="workout-view">
@@ -630,7 +634,7 @@
       <div class="settings-section card">
         <h3>About</h3>
         <p>
-          Cycle: Upper → Lower → Rest → repeat. Everything you type is saved right away
+          Cycle: Upper → Lower → Rest → Upper 2 → Lower 2 → Rest → repeat. Everything you type is saved right away
           on this phone, including a workout you haven't finished. Add the app to your Home Screen
           and export a backup now and then.
         </p>
@@ -693,7 +697,7 @@
   </nav>
 
   <script>
-    // ========== PROGRAM (same exercises as before) ==========
+    // ========== PROGRAM ==========
     const TOP_BACKOFF = [{ label: 'Top', target: '6-10' }, { label: 'Back-off', target: '12-20' }];
     const TOP_BACKOFF_HI = [{ label: 'Top', target: '8-12' }, { label: 'Back-off', target: '15-25' }];
 
@@ -717,11 +721,40 @@
         { id: 'l5', name: 'Calf raises – Standing (Slant)', sets: TOP_BACKOFF },
         { id: 'l6', name: 'Hanging leg raises', bodyweight: true,
           sets: [{ label: 'Set 1', target: 'failure' }, { label: 'Set 2', target: 'failure' }] }
+      ],
+      upper2: [
+        { id: 'ua1', name: 'HS Press Fly', sets: TOP_BACKOFF, notes: 'Banded' },
+        { id: 'ua2', name: 'Smith Shoulder press', sets: TOP_BACKOFF },
+        { id: 'ua3', name: 'Dip machine flex leverage', sets: TOP_BACKOFF },
+        { id: 'ua4', name: 'Icarian standing lateral', sets: TOP_BACKOFF },
+        { id: 'ua5', name: 'HS High Row', sets: TOP_BACKOFF },
+        { id: 'ua6', name: 'Chest Supported Row', sets: TOP_BACKOFF },
+        { id: 'ua7', name: 'Preacher machine – Strive', sets: TOP_BACKOFF_HI },
+        { id: 'ua8', name: 'Overhead Tri Ext – Seated cable', sets: TOP_BACKOFF_HI },
+        { id: 'ua9', name: 'Nautilus Crunch machine', sets: TOP_BACKOFF_HI }
+      ],
+      lower2: [
+        { id: 'la1', name: 'HS Seated Hamstring', sets: TOP_BACKOFF },
+        { id: 'la2', name: 'Hip Press', sets: TOP_BACKOFF },
+        { id: 'la3', name: 'SLDL', sets: TOP_BACKOFF, notes: 'Superset with hyperextensions' },
+        { id: 'la4', name: 'Hyperextensions', sets: TOP_BACKOFF, bodyweight: true },
+        { id: 'la5', name: 'HS Leg Ext', sets: TOP_BACKOFF },
+        { id: 'la6', name: 'Calves – Donkey', sets: TOP_BACKOFF },
+        { id: 'la7', name: 'Torso Twister', bodyweight: true,
+          sets: [{ label: 'Set 1', target: 'failure' }, { label: 'Set 2', target: 'failure' }] }
       ]
     };
-    const ALL_EXERCISES = [...PROGRAM.upper, ...PROGRAM.lower];
+    const ALL_EXERCISES = Object.values(PROGRAM).flat();
     const EX_BY_ID = Object.fromEntries(ALL_EXERCISES.map(e => [e.id, e]));
-    const NEXT_DAY = { upper: 'lower', lower: 'rest', rest: 'upper' };
+
+    // The cycle: Upper → Lower → Rest → Upper 2 → Lower 2 → Rest → repeat
+    const DAY_ORDER = ['upper', 'lower', 'rest', 'upper2', 'lower2', 'rest2'];
+    const WORKOUT_DAYS = DAY_ORDER.filter(d => PROGRAM[d]);
+    const DAY_LABEL = { upper: 'Upper', lower: 'Lower', rest: 'Rest', upper2: 'Upper 2', lower2: 'Lower 2', rest2: 'Rest' };
+    const NEXT_DAY = Object.fromEntries(DAY_ORDER.map((d, i) => [d, DAY_ORDER[(i + 1) % DAY_ORDER.length]]));
+    const dayLabel = d => DAY_LABEL[d] || String(d || '');
+    // Colour class: Upper 2 shares Upper's colour, and so on
+    const dayClass = d => (DAY_LABEL[d] ? d.replace(/2$/, '') : '');
 
     // ========== RANKS ==========
     // Liftoff-style ranking: each lift gets a 1–1000 score from its best
@@ -757,7 +790,23 @@
       l3: { std: 1.2,  region: 'lower', muscles: { quads: 1, glutes: 1 }, bwLoad: 0.6, hint: 'Log the total dumbbell weight (0 for bodyweight)' },
       l4: { std: 1.0,  region: 'lower', muscles: { quads: 1 } },
       l5: { std: 1.4,  region: 'lower', muscles: { calves: 1 } },
-      l6: { std: 15,   region: 'core',  muscles: { abs: 1 }, repsBased: true }
+      l6: { std: 15,   region: 'core',  muscles: { abs: 1 }, repsBased: true },
+      ua1: { std: 0.8,  region: 'upper', muscles: { chest: 1 } },
+      ua2: { std: 0.65, region: 'upper', muscles: { shoulders: 1, triceps: 0.3 } },
+      ua3: { std: 1.0,  region: 'upper', muscles: { triceps: 1, chest: 0.5 } },
+      ua4: { std: 0.2,  region: 'upper', muscles: { shoulders: 1 } },
+      ua5: { std: 1.0,  region: 'upper', muscles: { back: 1, biceps: 0.3 } },
+      ua6: { std: 1.0,  region: 'upper', muscles: { back: 1, biceps: 0.3 } },
+      ua7: { std: 0.6,  region: 'upper', muscles: { biceps: 1 } },
+      ua8: { std: 0.35, region: 'upper', muscles: { triceps: 1 } },
+      ua9: { std: 1.1,  region: 'core',  muscles: { abs: 1 } },
+      la1: { std: 0.8,  region: 'lower', muscles: { hamstrings: 1 } },
+      la2: { std: 0.7,  region: 'lower', muscles: { glutes: 1, hamstrings: 0.3 } },
+      la3: { std: 1.2,  region: 'lower', muscles: { hamstrings: 1, glutes: 0.5 } },
+      la4: { std: 20,   region: 'lower', muscles: { glutes: 1, hamstrings: 0.5 }, repsBased: true },
+      la5: { std: 1.2,  region: 'lower', muscles: { quads: 1 } },
+      la6: { std: 1.4,  region: 'lower', muscles: { calves: 1 } },
+      la7: { std: 30,   region: 'core',  muscles: { abs: 1 }, repsBased: true }
     };
 
     const MUSCLES = [
@@ -785,7 +834,7 @@
       version: 2,
       dayType: 'upper',
       sessions: [],   // { id, date, type, startedAt, finishedAt, ex: { [exId]: { sets:[{w,r}], note, legacy? } }, prs:[] }
-      drafts: {},     // { upper|lower: { date, startedAt, ex: { [exId]: { sets:[{w,r,done}], note } } } }
+      drafts: {},     // { upper|lower|upper2|lower2: { date, startedAt, ex: { [exId]: { sets:[{w,r,done}], note } } } }
       settings: { unit: 'lb', rest: 120, bw: null, sex: 'male' }
     });
 
@@ -833,7 +882,7 @@
         ...d,
         ...s,
         version: 2,
-        dayType: ['upper', 'lower', 'rest'].includes(s.dayType) ? s.dayType : d.dayType,
+        dayType: DAY_ORDER.includes(s.dayType) ? s.dayType : d.dayType,
         sessions,
         drafts: s.drafts && typeof s.drafts === 'object' ? s.drafts : {},
         settings
@@ -842,7 +891,7 @@
 
     // v1 stored one free-text result per exercise; keep it as a text note
     function migrateLegacy(old, target) {
-      if (['upper', 'lower', 'rest'].includes(old.dayType)) target.dayType = old.dayType;
+      if (DAY_ORDER.includes(old.dayType)) target.dayType = old.dayType;
       (old.history || []).forEach(h => {
         const ex = {};
         (h.exercises || []).forEach(e => {
@@ -1168,7 +1217,8 @@
       document.querySelectorAll('#day-switch button').forEach(b =>
         b.classList.toggle('active', b.dataset.day === state.dayType));
 
-      if (state.dayType === 'rest') {
+      if (!PROGRAM[state.dayType]) {
+        $('rest-next').textContent = $('rest-next-btn').textContent = dayLabel(NEXT_DAY[state.dayType]);
         $('rest-view').style.display = 'block';
         $('workout-view').style.display = 'none';
         return;
@@ -1259,7 +1309,7 @@
     }
 
     function updateProgress() {
-      if (state.dayType === 'rest') return;
+      if (!PROGRAM[state.dayType]) return;
       const exs = PROGRAM[state.dayType];
       let total = 0, done = 0;
       exs.forEach(ex => {
@@ -1275,7 +1325,7 @@
     function updateElapsed() {
       const d = getDraft(state.dayType, false);
       const el = $('elapsed-label');
-      if (!d || state.dayType === 'rest') { el.textContent = ''; return; }
+      if (!d || !PROGRAM[state.dayType]) { el.textContent = ''; return; }
       const mins = Math.floor((Date.now() - new Date(d.startedAt)) / 60000);
       el.textContent = mins < 600 ? `${mins} min` : '';
     }
@@ -1358,7 +1408,7 @@
     });
 
     $('rest-done-btn').addEventListener('click', () => {
-      state.dayType = 'upper';
+      state.dayType = NEXT_DAY[state.dayType] || 'upper';
       saveState();
       renderToday();
     });
@@ -1391,7 +1441,7 @@
       }
 
       if (!Object.values(ex).some(e => e.sets.length)) {
-        if (!(await askConfirm(`No sets logged. Skip this ${type} workout and move on to ${NEXT_DAY[type]}?`, 'Skip'))) return;
+        if (!(await askConfirm(`No sets logged. Skip this ${dayLabel(type)} workout and move on to ${dayLabel(NEXT_DAY[type])}?`, 'Skip'))) return;
         delete state.drafts[type];
       } else {
         // PRs: best estimated 1RM beats every previous session
@@ -1544,8 +1594,8 @@
       }
 
       if (historyTab === 'exercises') {
-        list.innerHTML = ['upper', 'lower'].map(type => `
-          <div class="group-title">${type === 'upper' ? 'Upper' : 'Lower'}</div>
+        list.innerHTML = WORKOUT_DAYS.map(type => `
+          <div class="group-title">${dayLabel(type)}</div>
           <div class="card" style="padding:0 14px">
             ${PROGRAM[type].map(ex => {
               const h = historyFor(ex.id);
@@ -1581,7 +1631,7 @@
           <div class="card history-item" data-session="${s.id}">
             <div class="history-top">
               <div class="history-date">${esc(formatDate(s.date))}</div>
-              <span class="tag ${esc(s.type)}">${esc(s.type)}</span>
+              <span class="tag ${esc(dayClass(s.type))}">${esc(dayLabel(s.type))}</span>
             </div>
             <div class="history-meta">${meta}</div>
             ${open ? `
@@ -1792,8 +1842,8 @@
           }).join('')}
         </div>`;
 
-      const lifts = ['upper', 'lower'].map(type => `
-        <div class="group-title">${type === 'upper' ? 'Upper' : 'Lower'} lifts</div>
+      const lifts = WORKOUT_DAYS.map(type => `
+        <div class="group-title">${dayLabel(type)} lifts</div>
         <div class="card" style="padding:4px 14px">
           ${PROGRAM[type].map(ex => {
             const sc = R.ex[ex.id] || 0;

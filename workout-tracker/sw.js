@@ -1,6 +1,6 @@
 // Caches the app shell so it opens offline. Workout data lives in
 // localStorage on the device and is never touched by the service worker.
-const CACHE = 'ul-tracker-v3';
+const CACHE = 'ul-tracker-v4';
 const ASSETS = [
   './',
   './index.html',
