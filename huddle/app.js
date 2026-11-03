@@ -72,8 +72,14 @@ const weekLabel = () => {
   return w ? `Week ${w}` : 'Preseason';
 };
 
+const searchKey = s => s.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/[^a-z0-9 ]/g, '').replace(/\s+/g, ' ').trim();
+const matches = (p, q) => {
+  if (!q || !q.trim()) return true;
+  const n = searchKey(q);
+  return (n && searchKey(p.name).includes(n)) || p.team.toLowerCase() === q.trim().toLowerCase();
+};
 const slug = s => s.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
-const norm = s => s.toLowerCase().replace(/[^a-z ]/g, '').replace(/\b(jr|sr|ii|iii|iv|v)\b/g, '').replace(/\s+/g, ' ').trim();
+const norm = s => s.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/[^a-z ]/g, '').replace(/\b(jr|sr|ii|iii|iv|v)\b/g, '').replace(/\s+/g, ' ').trim();
 function hash(s) {
   let h = 2166136261;
   for (let i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 16777619); }
@@ -101,6 +107,10 @@ function saveLive() { try { localStorage.setItem(LIVE_KEY, JSON.stringify(LIVE))
 // Sleeper's full player list gives every player's team and injury status,
 // including injured players who have no weekly projection. It's large, so
 // keep a trimmed copy and refresh it once a day.
+const LASTP_KEY = 'huddle-lastproj';
+let LASTP = {}; // sleeperId -> [ppr, half, std] from the latest week they had one
+try { LASTP = JSON.parse(localStorage.getItem(LASTP_KEY)) || {}; } catch {}
+
 const DIR_KEY = 'huddle-dir';
 const DIR_MAX_AGE = 864e5;
 let DIR = null; // { at, rows } with rows like LIVE.rows but no projection
@@ -162,8 +172,6 @@ function applyLive() {
   M = null;
   const index = {};
   for (const p of PLAYERS) index[p.pos === 'DST' ? 'DST|' + p.team : norm(p.name) + '|' + p.pos] = p;
-  // Keep every rostered player in the league, even ones data.js doesn't have
-  const keep = new Set(S.league ? S.league.rostered : []);
   const ids = new Set(PLAYERS.map(p => p.id));
   const rows = (LIVE && LIVE.rows || []).concat(DIR && DIR.rows || [], S.league && S.league.names || []);
 
@@ -175,10 +183,12 @@ function applyLive() {
     // Same name and position as a player already matched: a different person
     if (p && p.sid && p.sid !== sid) p = null;
     if (!p) {
-      if (!(ppr >= 3) && !keep.has(sid)) continue;
+      // Not in data.js: estimate the season from this week's projection, or
+      // the last one Sleeper gave, so the player can be searched and traded
+      const w = ppr != null ? [ppr, half, std] : LASTP[sid] || [0, 0, 0];
       let id = slug(name + '-' + pos);
       if (ids.has(id)) id += '-' + slug(sid);
-      p = { id, name, pos, team, ppr: (ppr || 0) * 17, rec: Math.max(0, (ppr || 0) - (std || 0)) * 17, est: true };
+      p = { id, name, pos, team, ppr: w[0] * 17, rec: Math.max(0, w[0] - w[2]) * 17, est: true };
       PLAYERS.push(p);
       ids.add(id);
     }
@@ -290,6 +300,17 @@ async function refreshLive() {
     } catch { next.notes.push('trending players'); }
     LIVE = next;
     saveLive();
+    // The first time, also read last week so players on bye this week
+    // have a projection to go on
+    if (next.week > 1 && Object.keys(LASTP).length < 200) {
+      try {
+        const q = ['QB', 'RB', 'WR', 'TE', 'K', 'DEF'].map(p => 'position[]=' + p).join('&');
+        const prev = parseProjections(await getJSON(`/projections/nfl/${next.season}/${next.week - 1}?season_type=regular&${q}`));
+        for (const [sid, , , , ppr, half, std] of prev) if (ppr > 0) LASTP[sid] = [ppr, half, std];
+      } catch {}
+    }
+    for (const [sid, , , , ppr, half, std] of next.rows) if (ppr > 0) LASTP[sid] = [ppr, half, std];
+    try { localStorage.setItem(LASTP_KEY, JSON.stringify(LASTP)); } catch {}
     if (S.league) {
       try { await fetchRosters(); SYNC_ERR = ''; } catch (e) { SYNC_ERR = errText(e); LIVE.notes.push('league rosters'); }
     }
@@ -578,9 +599,13 @@ function rankList() {
   }
   const q = RQ.trim().toLowerCase();
   let html = '', last = 0;
+  let shown = 0;
   list.forEach((p, i) => {
     const m = I(p);
-    if (q && !p.name.toLowerCase().includes(q) && p.team.toLowerCase() !== q) return;
+    if (!matches(p, q)) return;
+    // Without a search, skip players with no projection and stop at 300
+    if (!q && pos !== 'HOT' && (shown >= 300 || (p.est && m.pts <= 0))) return;
+    shown++;
     if (!q && tiers && tierOf(p) !== last) { last = tierOf(p); html += `<div class="tier">Tier ${last}</div>`; }
     const proj = week ? f1(m.wk) : `${m.pts.toFixed(0)}<small>${f1(m.wk)}/wk</small>`;
     html += `<button class="prow" data-pid="${p.id}"><span class="rk">${i + 1}</span><span class="who">${who(p)}</span>
@@ -637,7 +662,8 @@ function renderWaiver() {
 
   let picks = '';
   if (S.team.length) {
-    const ranked = model().overall.filter(p => pool.includes(p)).slice(0, 60);
+    const inPool = new Set(pool);
+    const ranked = model().overall.filter(p => inPool.has(p)).slice(0, 60);
     const cands = new Set(ranked.concat(pool.filter(p => adds[p.id])));
     const recs = [...cands].map(p => claim(p, adds))
       .filter(c => c.s > .05 || c.w > .05 || (c.depth > .3 && FLEX.includes(c.p.pos)))
@@ -659,7 +685,7 @@ function renderWaiver() {
   const hasTrend = Object.keys(adds).length > 0;
   const sort = WSORT === 'week' && !hasLive() || WSORT === 'hot' && !hasTrend ? 'season' : WSORT;
   const sortSeg = [['season', 'Season'], ...(hasLive() ? [['week', weekLabel()]] : []), ...(hasTrend ? [['hot', 'Trending']] : [])];
-  let list = pool.filter(p => WPOS === 'ALL' || (WPOS === 'FLEX' ? FLEX.includes(p.pos) : p.pos === WPOS));
+  let list = pool.filter(p => (!p.est || I(p).pts > 0) && (WPOS === 'ALL' || (WPOS === 'FLEX' ? FLEX.includes(p.pos) : p.pos === WPOS)));
   list.sort(sort === 'week' ? (a, b) => I(b).wk - I(a).wk
     : sort === 'hot' ? (a, b) => (adds[b.id] || 0) - (adds[a.id] || 0) || I(b).ovr - I(a).ovr
     : (a, b) => I(b).ovr - I(a).ovr);
@@ -968,7 +994,7 @@ function renderDraft() {
 
   const taken = new Set(d.picks);
   const q = DQ.trim().toLowerCase();
-  const avail = model().adpOrder.filter(p => !taken.has(p.id) && (DPOS === 'ALL' || p.pos === DPOS) && (!q || p.name.toLowerCase().includes(q))).slice(0, 60);
+  const avail = model().adpOrder.filter(p => !taken.has(p.id) && (DPOS === 'ALL' || p.pos === DPOS) && matches(p, q)).slice(0, 60);
   const rows = avail.map(p => `<div class="prow drow"><span class="rk">${I(p).adp}</span><button class="who" data-pid="${p.id}">${who(p)}</button>
     <span class="num">${I(p).value}</span><button class="draft-btn" data-draftpick="${p.id}" ${mine ? '' : 'disabled'}>Draft</button></div>`).join('');
   const chips = ['ALL', ...POS].map(p => `<button class="chip ${DPOS === p ? 'on' : ''}" data-dpos="${p}">${p === 'ALL' ? 'All' : p}</button>`).join('');
@@ -1180,25 +1206,37 @@ function openPlayer(id) {
 
 const PICK_TITLES = { team: 'Add to My Team', ss: 'Add to Start/Sit', give: 'You give', get: 'You get' };
 
+const otherRostered = () => {
+  const r = myRoster();
+  return S.league && S.league.rosters ? new Set(S.league.rosters.filter(x => x !== r).flatMap(x => idsOf(x.players))) : null;
+};
+
 function openPicker(key) {
-  PICK = { key, pos: key !== 'team' && S.team.length ? 'MINE' : 'ALL', q: '' };
+  // Start with the players you'd most likely pick: yours when giving or
+  // comparing, other teams' when trading for someone
+  const pos = key === 'get' ? (otherRostered() ? 'OTHERS' : 'ALL') : key !== 'team' && S.team.length ? 'MINE' : 'ALL';
+  PICK = { key, pos, q: '' };
   openSheet(`<div class="sheet-top"><h2>${PICK_TITLES[key]}</h2><button class="icon-btn" data-act="sheet-close" aria-label="Close">${X_ICON}</button></div>
-    <input class="search" id="pick-q" type="search" placeholder="Search players" autocomplete="off">
+    <input class="search" id="pick-q" type="search" placeholder="Search any NFL player" autocomplete="off">
     <div class="chips" id="pick-chips"></div><div class="list" id="pick-list"></div>`);
   pickList();
 }
 
 function pickList() {
   if (!PICK) return;
-  const chipsFor = ['ALL', ...(S.team.length && PICK.key !== 'team' ? ['MINE'] : []), ...POS];
-  $('#pick-chips').innerHTML = chipsFor.map(p => `<button class="chip ${PICK.pos === p ? 'on' : ''}" data-ppos="${p}">${p === 'ALL' ? 'All' : p === 'MINE' ? 'My team' : p}</button>`).join('');
+  const others = otherRostered();
+  const chipsFor = ['ALL', ...(S.team.length && PICK.key !== 'team' ? ['MINE'] : []), ...(others && PICK.key !== 'team' ? ['OTHERS'] : []), ...POS];
+  const label = { ALL: 'All', MINE: 'My team', OTHERS: 'Other teams' };
+  $('#pick-chips').innerHTML = chipsFor.map(p => `<button class="chip ${PICK.pos === p ? 'on' : ''}" data-ppos="${p}">${label[p] || p}</button>`).join('');
   const exclude = new Set(PICK.key === 'give' || PICK.key === 'get' ? [...S.give, ...S.get] : S[PICK.key]);
-  const q = PICK.q.trim().toLowerCase();
-  const list = model().overall.filter(p => !exclude.has(p.id)
-    && (PICK.pos === 'ALL' || (PICK.pos === 'MINE' ? S.team.includes(p.id) : p.pos === PICK.pos))
-    && (!q || p.name.toLowerCase().includes(q) || p.team.toLowerCase() === q)).slice(0, 80);
+  const q = PICK.q;
+  // A search looks through every player, whichever chip is selected
+  const inChip = p => q.trim() || PICK.pos === 'ALL' || (PICK.pos === 'MINE' ? S.team.includes(p.id) : PICK.pos === 'OTHERS' ? others.has(p.id) : p.pos === PICK.pos);
+  const all = model().overall.filter(p => !exclude.has(p.id) && inChip(p) && matches(p, q) && (q.trim() || !p.est || I(p).pts > 0));
+  const list = all.slice(0, 100);
   $('#pick-list').innerHTML = list.map(p => `<button class="prow simple" data-pick="${p.id}"><span class="who">${who(p)}</span><span class="num">${I(p).value}</span></button>`).join('')
-    || '<p class="empty">No players match.</p>';
+    + (all.length > list.length ? `<p class="empty">Showing the top 100 of ${all.length}. Search to find anyone else.</p>` : '')
+    || '<p class="empty">No players match. Try part of the last name.</p>';
 }
 
 function addTo(key, id) {
@@ -1394,8 +1432,8 @@ document.addEventListener('click', e => {
     case 'reset':
       if (confirm('Erase your team, drafts and settings?')) {
         clearTimeout(cpuTimer); cpuTimer = null;
-        try { localStorage.removeItem(KEY); localStorage.removeItem(DIR_KEY); } catch {}
-        DIR = null;
+        try { localStorage.removeItem(KEY); localStorage.removeItem(DIR_KEY); localStorage.removeItem(LASTP_KEY); } catch {}
+        DIR = null; LASTP = {};
         LEAGUES = null; LEAGUE_ERR = '';
         S = load(); applyLive(); show($('#menu'), false); render();
       }
