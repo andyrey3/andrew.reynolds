@@ -1,0 +1,15 @@
+{
+  "name": "Morsel — AI Calorie Tracker",
+  "short_name": "Morsel",
+  "description": "Snap a photo of your food and Morsel counts the calories, protein, carbs and fat",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#f6f6f4",
+  "theme_color": "#f6f6f4",
+  "orientation": "portrait",
+  "icons": [
+    { "src": "icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any maskable" },
+    { "src": "icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any maskable" }
+  ]
+}
