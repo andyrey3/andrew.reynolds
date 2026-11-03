@@ -1,6 +1,6 @@
 // Caches the app shell and the face model so scans work offline after the
 // first one. Scans and your plan live in localStorage and are never touched here.
-const CACHE = 'facet-v1';
+const CACHE = 'facet-v2';
 const ASSETS = [
   './',
   './index.html',
@@ -10,8 +10,8 @@ const ASSETS = [
   './analysis.js',
   './app.js'
 ];
-// The MediaPipe library and model never change at a pinned version
-const PINNED = ['https://cdn.jsdelivr.net/npm/@mediapipe/', 'https://storage.googleapis.com/mediapipe-models/'];
+// The bundled MediaPipe library and model only change with a new folder name
+const PINNED = [new URL('vendor/', self.registration.scope).href];
 
 self.addEventListener('install', e => {
   e.waitUntil(

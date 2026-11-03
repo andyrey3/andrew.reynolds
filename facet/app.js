@@ -25,8 +25,10 @@ function save() {
   }
 }
 
-const MP = 'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14';
-const MODEL = 'https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task';
+// MediaPipe (Apache-2.0) and the face model are served from this site, so no
+// third-party code runs here. See vendor/NOTICE.
+const MP = new URL('vendor/mediapipe', location.href).href;
+const MODEL = new URL('vendor/face_landmarker.task', location.href).href;
 const MAX_SCANS = 40;
 const OUT_W = 480, OUT_H = 600;
 
