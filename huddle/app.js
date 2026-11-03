@@ -73,10 +73,39 @@ const weekLabel = () => {
 };
 
 const searchKey = s => s.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/[^a-z0-9 ]/g, '').replace(/\s+/g, ' ').trim();
+// Edit distance that also counts swapped neighbours ("micheal") as one edit
+function typos(a, b) {
+  const d = [];
+  for (let i = 0; i <= a.length; i++) { d.push([i]); for (let j = 1; j <= b.length; j++) d[i][j] = i ? 0 : j; }
+  for (let i = 1; i <= a.length; i++) for (let j = 1; j <= b.length; j++) {
+    d[i][j] = Math.min(d[i - 1][j] + 1, d[i][j - 1] + 1, d[i - 1][j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1));
+    if (i > 1 && j > 1 && a[i - 1] === b[j - 2] && a[i - 2] === b[j - 1]) d[i][j] = Math.min(d[i][j], d[i - 2][j - 2] + 1);
+  }
+  return d[a.length][b.length];
+}
+
+// One typed word is close to one word of a name: a prefix of it, or within
+// a typo or two of the word or of its start ("garret", "skatteboo", "wils")
+function wordMatch(q, w) {
+  if (w.startsWith(q)) return true;
+  const tol = q.length <= 3 ? 0 : q.length <= 6 ? 1 : 2;
+  if (!tol) return false;
+  for (let k = Math.max(1, q.length - 1); k <= Math.min(w.length, q.length + 1); k++) if (typos(q, w.slice(0, k)) <= tol) return true;
+  return false;
+}
+
+// 2 = exact match, 1 = close enough with typos, 0 = no match
 const matches = (p, q) => {
-  if (!q || !q.trim()) return true;
+  if (!q || !q.trim()) return 2;
   const n = searchKey(q);
-  return (n && searchKey(p.name).includes(n)) || p.team.toLowerCase() === q.trim().toLowerCase();
+  if (!n) return 0;
+  if (p.team.toLowerCase() === q.trim().toLowerCase()) return 2;
+  const name = searchKey(p.name);
+  // Spaces don't matter either: "amon ra", "amonra" and "stbrown" all work
+  if (name.includes(n) || name.replace(/ /g, '').includes(n.replace(/ /g, ''))) return 2;
+  // Every typed word has to match some word of the name, typos allowed
+  const words = name.split(' ');
+  return n.split(' ').every(qw => words.some(w => wordMatch(qw, w))) ? 1 : 0;
 };
 const slug = s => s.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
 const norm = s => s.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/[^a-z ]/g, '').replace(/\b(jr|sr|ii|iii|iv|v)\b/g, '').replace(/\s+/g, ' ').trim();
@@ -172,16 +201,39 @@ function applyLive() {
   M = null;
   const index = {};
   for (const p of PLAYERS) index[p.pos === 'DST' ? 'DST|' + p.team : norm(p.name) + '|' + p.pos] = p;
+  // Fallback for names written differently ("Cam" / "Cameron"): same last
+  // name, position and team, when only one player fits
+  const lastKey = (name, pos, team) => norm(name).split(' ').pop() + '|' + pos + '|' + team;
+  const byLast = {};
+  for (const p of PLAYERS) if (p.pos !== 'DST') { const k = lastKey(p.name, p.pos, p.team); byLast[k] = k in byLast ? null : p; }
   const ids = new Set(PLAYERS.map(p => p.id));
   const rows = (LIVE && LIVE.rows || []).concat(DIR && DIR.rows || [], S.league && S.league.names || []);
 
-  for (const [sid, name, pos, team, ppr, half, std, opp, inj] of rows) {
+  const link = (p, [sid, , , team, ppr, half, std, opp, inj]) => {
+    p.sid = sid;
+    if (team) p.team = team;
+    p.inj = inj || '';
+    if (ppr != null) { p.live = { ppr, half, std, opp }; PLAYING.add(p.team); }
+    SID[sid] = p;
+  };
+
+  // Exact names first, so a fallback match below can't take a player whose
+  // exact entry comes later in the list
+  for (const row of rows) {
+    const [sid, name, pos] = row;
+    if (SID[sid]) continue;
+    const p = index[pos === 'DST' ? 'DST|' + sid : norm(name) + '|' + pos];
+    if (p && !p.sid) link(p, row);
+  }
+
+  for (const row of rows) {
+    const [sid, name, pos, team, ppr, half, std, , inj] = row;
     // A player seen twice (projection, then directory) keeps the first
     // row's numbers but picks up an injury status if it was missing
     if (SID[sid]) { if (inj && !SID[sid].inj) SID[sid].inj = inj; continue; }
-    let p = index[pos === 'DST' ? 'DST|' + sid : norm(name) + '|' + pos];
-    // Same name and position as a player already matched: a different person
-    if (p && p.sid && p.sid !== sid) p = null;
+    let p = pos !== 'DST' && team ? byLast[lastKey(name, pos, team)] || null : null;
+    // Already matched to someone else: a different person
+    if (p && p.sid) p = null;
     if (!p) {
       // Not in data.js: estimate the season from this week's projection, or
       // the last one Sleeper gave, so the player can be searched and traded
@@ -192,11 +244,7 @@ function applyLive() {
       PLAYERS.push(p);
       ids.add(id);
     }
-    p.sid = sid;
-    if (team) p.team = team;
-    p.inj = inj || '';
-    if (ppr != null) { p.live = { ppr, half, std, opp }; PLAYING.add(p.team); }
-    SID[sid] = p;
+    link(p, row);
   }
   BY_ID = Object.fromEntries(PLAYERS.map(p => [p.id, p]));
 }
@@ -1232,7 +1280,8 @@ function pickList() {
   const q = PICK.q;
   // A search looks through every player, whichever chip is selected
   const inChip = p => q.trim() || PICK.pos === 'ALL' || (PICK.pos === 'MINE' ? S.team.includes(p.id) : PICK.pos === 'OTHERS' ? others.has(p.id) : p.pos === PICK.pos);
-  const all = model().overall.filter(p => !exclude.has(p.id) && inChip(p) && matches(p, q) && (q.trim() || !p.est || I(p).pts > 0));
+  const all = model().overall.filter(p => !exclude.has(p.id) && inChip(p) && matches(p, q) && (q.trim() || !p.est || I(p).pts > 0))
+    .map(p => [p, matches(p, q)]).sort((a, b) => b[1] - a[1]).map(x => x[0]);
   const list = all.slice(0, 100);
   $('#pick-list').innerHTML = list.map(p => `<button class="prow simple" data-pick="${p.id}"><span class="who">${who(p)}</span><span class="num">${I(p).value}</span></button>`).join('')
     + (all.length > list.length ? `<p class="empty">Showing the top 100 of ${all.length}. Search to find anyone else.</p>` : '')
