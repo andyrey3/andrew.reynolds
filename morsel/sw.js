@@ -1,6 +1,6 @@
 // Caches the app shell so Morsel opens offline. Your log lives in localStorage
 // and photos in IndexedDB; neither is touched here.
-const CACHE = 'morsel-v1';
+const CACHE = 'morsel-v2';
 const ASSETS = ['./', './index.html', './manifest.json', './icon-192.png', './icon-512.png', './foods.js', './app.js'];
 
 self.addEventListener('install', e => {

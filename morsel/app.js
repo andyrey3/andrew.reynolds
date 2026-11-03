@@ -67,7 +67,7 @@ function defaults() {
     v: 1, onboarded: false,
     profile: { sex: 'male', birth: '1996-06-15', heightCm: 178, weightKg: 80, goalKg: 74, goal: 'lose', paceKg: 0.5, workouts: '3-5', units: 'imperial' },
     goals: { cal: 2200, protein: 150, carbs: 240, fat: 68, fiber: 30, sugar: 50, sodium: 2300, water: 2500 },
-    settings: { apiKey: '', addBurned: false, rollover: false },
+    settings: { apiKeyEnc: null, keyHint: '', addBurned: false, rollover: false },
     entries: [], exercise: [], water: {}, weights: [], saved: [],
   };
 }
@@ -88,6 +88,10 @@ function cleanIngredients(list) {
     id: isId(i?.id) ? i.id : uid(), name: str(i?.name, 80), amount: str(i?.amount, 60),
     cal: pos(i?.cal, 100000), protein: pos(i?.protein, 10000), carbs: pos(i?.carbs, 10000), fat: pos(i?.fat, 10000),
   }));
+}
+function cleanEnc(e) {
+  const ok = (v, max) => typeof v === 'string' && v.length <= max && /^[A-Za-z0-9+/]+=*$/.test(v);
+  return e && ok(e.iv, 32) && ok(e.ct, 1024) ? { iv: e.iv, ct: e.ct } : null;
 }
 function sanitizeState(d) {
   const b = defaults();
@@ -112,7 +116,11 @@ function sanitizeState(d) {
       units: oneOf(p.units, ['imperial', 'metric'], b.profile.units),
     },
     goals,
-    settings: { apiKey: str(d?.settings?.apiKey, 300), addBurned: !!d?.settings?.addBurned, rollover: !!d?.settings?.rollover },
+    settings: {
+      apiKeyEnc: cleanEnc(d?.settings?.apiKeyEnc),
+      keyHint: /^[A-Za-z0-9_-]{4}$/.test(d?.settings?.keyHint) && d?.settings?.apiKeyEnc ? d.settings.keyHint : '',
+      addBurned: !!d?.settings?.addBurned, rollover: !!d?.settings?.rollover,
+    },
     entries: arr(d?.entries).slice(0, 20000).map(e => ({
       id: isId(e?.id) ? e.id : uid(), ts: cleanTs(e?.ts), date: isDate(e?.date) ? e.date : today(), kind: 'food',
       name: str(e?.name, 80), serving: str(e?.serving, 80), servings: clamp(num(e?.servings) || 1, 0.25, 20),
@@ -140,7 +148,12 @@ function sanitizeState(d) {
 function load() {
   try {
     const raw = localStorage.getItem(KEY);
-    if (raw) S = sanitizeState(JSON.parse(raw));
+    if (!raw) return;
+    const d = JSON.parse(raw);
+    S = sanitizeState(d);
+    // Older versions kept the key as plain text: encrypt it and drop the plain copy
+    const legacy = str(d?.settings?.apiKey, 300).trim();
+    if (legacy) { save(); Vault.set(legacy); }
   } catch { /* start fresh */ }
 }
 function save() {
@@ -153,17 +166,21 @@ const IDB = {
   open() {
     if (this.db) return Promise.resolve(this.db);
     return new Promise((res, rej) => {
-      const r = indexedDB.open('morsel-photos', 1);
-      r.onupgradeneeded = () => r.result.createObjectStore('img');
+      const r = indexedDB.open('morsel-photos', 2);
+      r.onupgradeneeded = () => {
+        const db = r.result;
+        if (!db.objectStoreNames.contains('img')) db.createObjectStore('img');
+        if (!db.objectStoreNames.contains('keys')) db.createObjectStore('keys');
+      };
       r.onsuccess = () => { this.db = r.result; res(this.db); };
       r.onerror = () => rej(r.error);
     });
   },
-  async tx(mode, fn) {
+  async tx(mode, fn, store = 'img') {
     const db = await this.open();
     return new Promise((res, rej) => {
-      const t = db.transaction('img', mode);
-      const req = fn(t.objectStore('img'));
+      const t = db.transaction(store, mode);
+      const req = fn(t.objectStore(store));
       t.oncomplete = () => res(req && req.result);
       t.onerror = () => rej(t.error);
     });
@@ -176,6 +193,59 @@ const IDB = {
   del(id) { imgCache.delete(id); return this.tx('readwrite', s => s.delete(id)).catch(() => {}); },
 };
 const imgCache = new Map();
+
+/* ---------------- API key vault ----------------
+   The Claude key is encrypted with AES-GCM before it is saved. The encryption
+   key is a non-extractable CryptoKey kept in IndexedDB, so the raw bytes of it
+   can never be read out, and localStorage only ever holds ciphertext plus the
+   last 4 characters for display. The full key is decrypted into memory only
+   when a scan needs it and is never written back into the page. */
+const b64 = u8 => btoa(String.fromCharCode(...u8));
+const unb64 = v => Uint8Array.from(atob(v), c => c.charCodeAt(0));
+const Vault = {
+  mem: '',
+  async wrapKey(create) {
+    let k = await IDB.tx('readonly', st => st.get('apiKeyWrap'), 'keys').catch(() => null);
+    if (!k && create) {
+      k = await crypto.subtle.generateKey({ name: 'AES-GCM', length: 256 }, false, ['encrypt', 'decrypt']);
+      await IDB.tx('readwrite', st => st.put(k, 'apiKeyWrap'), 'keys');
+    }
+    return k;
+  },
+  async set(plain) {
+    plain = (plain || '').trim();
+    this.mem = plain;
+    S.settings.apiKeyEnc = null;
+    S.settings.keyHint = '';
+    if (plain) {
+      try {
+        const k = await this.wrapKey(true);
+        const iv = crypto.getRandomValues(new Uint8Array(12));
+        const ct = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, k, new TextEncoder().encode(plain));
+        S.settings.apiKeyEnc = { iv: b64(iv), ct: b64(new Uint8Array(ct)) };
+        S.settings.keyHint = plain.slice(-4);
+      } catch {
+        toast("This browser can't store the key securely, so it's kept only until you close Morsel.");
+      }
+    }
+    save();
+    refresh();
+  },
+  async get() {
+    if (this.mem) return this.mem;
+    const enc = S.settings.apiKeyEnc;
+    if (!enc) return '';
+    try {
+      const k = await this.wrapKey(false);
+      if (!k) return '';
+      const pt = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: unb64(enc.iv) }, k, unb64(enc.ct));
+      this.mem = new TextDecoder().decode(pt);
+      return this.mem;
+    } catch { return ''; }
+  },
+};
+const hasKey = () => !!(Vault.mem || S.settings.apiKeyEnc);
+const keyLabel = () => `sk-ant-…${esc(S.settings.keyHint || (Vault.mem ? Vault.mem.slice(-4) : ''))}`;
 function hydrateImages(root = document) {
   root.querySelectorAll('[data-img]').forEach(async el => {
     const data = await IDB.get(el.dataset.img);
@@ -579,7 +649,7 @@ How to estimate:
 Keep names short and title-cased. Never refuse to estimate because of uncertainty; give your best estimate.`;
 
 async function callClaude({ system, content, schema }) {
-  const key = (S.settings.apiKey || '').trim();
+  const key = (await Vault.get()).trim();
   if (!key) throw new Error('Add your Claude API key in Profile to use AI scanning.');
   let res;
   try {
@@ -761,7 +831,7 @@ const scan = { stream: null, mode: 'food', torch: false, timer: null, busy: fals
 let pendingPickMode = 'food';
 
 function needKey(then) {
-  if ((S.settings.apiKey || '').trim()) return false;
+  if (hasKey()) return false;
   openKeySheet(then);
   return true;
 }
@@ -1476,7 +1546,7 @@ function openWeightSheet() {
 /* ---------------- Settings ---------------- */
 function settingsHTML() {
   const p = S.profile;
-  const hasKey = !!(S.settings.apiKey || '').trim();
+  const connected = hasKey();
   const sw = (k, on) => `<button class="li" data-act="toggle" data-k="${k}"><span>${{ addBurned: 'Add burned calories to daily goal', rollover: 'Roll over leftover calories (up to 200)' }[k]}</span><span class="switch ${on ? 'on' : ''}" role="switch" aria-checked="${on}"></span></button>`;
   return `<div class="wrap">
     <div class="top"><h1>Profile</h1></div>
@@ -1493,7 +1563,7 @@ function settingsHTML() {
 
     <div class="section-title"><h3>AI food scanning</h3></div>
     <div class="card list" style="padding:4px 16px">
-      <button class="li" data-act="apikey"><span>✨ Claude API key</span><span class="r" style="color:${hasKey ? 'var(--accent)' : 'var(--danger)'}">${hasKey ? 'Connected' : 'Not set'} ›</span></button>
+      <button class="li" data-act="apikey"><span>✨ Claude API key</span><span class="r" style="color:${connected ? 'var(--accent)' : 'var(--danger)'}">${connected ? `Connected · …${esc(S.settings.keyHint)}` : 'Not set'} ›</span></button>
     </div>
     <p class="tiny muted" style="margin:8px 4px 0">Photos and descriptions are sent to Anthropic's Claude API with your key to estimate nutrition. Everything else stays on this device.</p>
 
@@ -1594,23 +1664,29 @@ function openKeySheet(after) {
   const L = openLayer({
     build: () => `<h2>✨ Connect Claude</h2>
       <p class="small muted" style="margin-bottom:10px">Morsel uses Claude to recognize food in your photos and estimate nutrition. Paste an API key from <b>console.anthropic.com</b> → API keys. Usage is billed to your Anthropic account; each scan costs a few cents.</p>
-      <input class="inp" name="k" type="password" autocomplete="off" spellcheck="false" placeholder="sk-ant-…" value="${esc(S.settings.apiKey)}">
-      <div class="note" style="margin-top:10px">Your key is stored only on this device and sent only to api.anthropic.com. Other apps on this site share the same browser storage.</div>
-      <div class="btnrow" style="margin-top:16px">${S.settings.apiKey ? '<button class="btn danger" data-x="rm">Remove key</button>' : '<button class="btn ghost" data-x="no">Not now</button>'}<button class="btn" data-x="ok">Save</button></div>`,
+      ${hasKey() ? `<div class="card" style="display:flex;justify-content:space-between;align-items:center;padding:12px 14px;margin-bottom:10px"><span class="small muted">Saved key</span><b class="num">${keyLabel()}</b></div>` : ''}
+      <input class="inp" name="k" type="password" autocomplete="off" spellcheck="false" placeholder="${hasKey() ? 'Paste a new key to replace it' : 'sk-ant-…'}">
+      <div class="note" style="margin-top:10px">Your key is encrypted on this device, never shown again after you save it, and only sent to api.anthropic.com.</div>
+      <div class="btnrow" style="margin-top:16px">${hasKey() ? '<button class="btn danger" data-x="rm">Remove key</button>' : '<button class="btn ghost" data-x="no">Not now</button>'}<button class="btn" data-x="ok">Save</button></div>`,
     mount: el => {
-      el.querySelector('[data-x=ok]').onclick = () => {
-        const k = el.querySelector('[name=k]').value.trim();
+      el.querySelector('[data-x=ok]').onclick = async () => {
+        const input = el.querySelector('[name=k]');
+        const k = input.value.trim();
+        if (!k && hasKey()) { closeLayer(L); return; }
         if (!/^sk-ant-/.test(k)) { toast('That doesn\'t look like a Claude API key (sk-ant-…)'); return; }
-        S.settings.apiKey = k; save(); closeLayer(L); refresh(); toast('Claude connected');
+        input.value = '';
+        closeLayer(L);
+        await Vault.set(k);
+        toast('Claude connected');
         if (after) after();
       };
       el.querySelector('[data-x=no]')?.addEventListener('click', () => closeLayer(L));
-      el.querySelector('[data-x=rm]')?.addEventListener('click', () => { S.settings.apiKey = ''; save(); closeLayer(L); refresh(); toast('Key removed'); });
+      el.querySelector('[data-x=rm]')?.addEventListener('click', async () => { closeLayer(L); await Vault.set(''); toast('Key removed'); });
     },
   });
 }
 function exportData() {
-  const data = { ...S, settings: { ...S.settings, apiKey: '' } };
+  const data = { ...S, settings: { ...S.settings, apiKeyEnc: null, keyHint: '' } };
   const blob = new Blob([JSON.stringify(data, null, 1)], { type: 'application/json' });
   const a = document.createElement('a');
   a.href = URL.createObjectURL(blob);
@@ -1627,8 +1703,8 @@ async function importData(input) {
     const d = JSON.parse(await f.text());
     if (!d || !Array.isArray(d.entries) || !d.profile || !d.goals) throw new Error();
     // Keep this device's API key: a backup file never gets to set which key Morsel uses
-    const key = S.settings.apiKey;
-    S = sanitizeState({ ...d, onboarded: true, settings: { ...d.settings, apiKey: key } });
+    const { apiKeyEnc, keyHint } = S.settings;
+    S = sanitizeState({ ...d, onboarded: true, settings: { ...d.settings, apiKeyEnc, keyHint } });
     save(); closeAllLayers(); refresh(); toast('Backup restored');
   } catch { toast("That file isn't a Morsel backup"); }
 }
@@ -1714,7 +1790,7 @@ function renderOnboarding() {
   } else if (step === 'key') {
     body = `<h1>Turn on AI food scanning</h1><p class="muted">Morsel uses Claude to recognize food in your photos.</p>
       <div class="card" style="margin-bottom:14px"><p class="small">1. Go to <b>console.anthropic.com</b> and sign in.<br>2. Open <b>API keys</b> and create a key.<br>3. Paste it below.</p></div>
-      <input class="inp" name="k" type="password" autocomplete="off" spellcheck="false" placeholder="sk-ant-…" value="${esc(ob.key || '')}">
+      <input class="inp" name="k" type="password" autocomplete="off" spellcheck="false" placeholder="sk-ant-…">
       <p class="tiny muted" style="margin-top:10px">The key stays on this device and is only sent to api.anthropic.com. Scans are billed to your Anthropic account. You can still log food by search, description and quick add without it.</p>`;
     cta = 'Finish';
   }
@@ -1763,7 +1839,8 @@ function onObClick(ev) {
     if (step === 'key' && a === 'next') {
       const k = (ob.key || '').trim();
       if (k && !/^sk-ant-/.test(k)) { toast("That doesn't look like a Claude API key (sk-ant-…)"); return; }
-      S.settings.apiKey = k;
+      ob.key = '';
+      if (k) Vault.set(k);
     }
     if (step === 'key') {
       if (p.goal === 'maintain') p.goalKg = p.weightKg;
@@ -1811,8 +1888,9 @@ document.addEventListener('click', ev => {
     case 'import': $('#importFile').click(); break;
     case 'reset':
       confirmSheet('Delete all data?', 'This erases your log, weights, saved foods, goals and API key from this device. It cannot be undone.', 'Delete everything', () => {
+        IDB.db?.close();
         indexedDB.deleteDatabase('morsel-photos');
-        IDB.db = null; imgCache.clear();
+        IDB.db = null; imgCache.clear(); Vault.mem = '';
         localStorage.removeItem(KEY);
         S = defaults(); view = 'home'; sel = today(); ob = null;
         closeAllLayers(); render();
