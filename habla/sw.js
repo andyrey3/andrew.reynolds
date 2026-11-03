@@ -1,12 +1,13 @@
 // Caches the app shell so it opens offline. Lesson progress lives in
 // localStorage on the device and is never touched by the service worker.
-const CACHE = 'habla-v4';
+const CACHE = 'habla-v5';
 const ASSETS = [
   './',
   './index.html',
   './manifest.json',
   './icon-192.png',
-  './icon-512.png'
+  './icon-512.png',
+  './app.js'
 ];
 
 self.addEventListener('install', e => {
@@ -28,15 +29,17 @@ self.addEventListener('fetch', e => {
 
   // Pages: always ask the network (skipping the browser's HTTP cache) so
   // updates show up right away; fall back to the saved copy when offline
-  if (e.request.mode === 'navigate') {
+  // Pages and scripts: network first so updates show up right away
+  if (e.request.mode === 'navigate' || new URL(e.request.url).pathname.endsWith('.js')) {
+    const key = e.request.mode === 'navigate' ? './index.html' : e.request;
     e.respondWith(
       fetch(e.request.url, { cache: 'no-store' })
         .then(res => {
           const copy = res.clone();
-          caches.open(CACHE).then(c => c.put('./index.html', copy));
+          if (res.ok) caches.open(CACHE).then(c => c.put(key, copy));
           return res;
         })
-        .catch(() => caches.match('./index.html'))
+        .catch(() => caches.match(key))
     );
     return;
   }
