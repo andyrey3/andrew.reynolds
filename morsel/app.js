@@ -72,15 +72,75 @@ function defaults() {
   };
 }
 let S = defaults();
+
+// Rebuild saved or imported data field by field with the expected types, so a
+// tampered backup file can't slip markup into the page or odd values into the math.
+const arr = v => (Array.isArray(v) ? v : []);
+const str = (v, max = 200) => (typeof v === 'string' ? v.slice(0, max) : '');
+const pos = (v, max) => clamp(num(v), 0, max);
+const oneOf = (v, list, d) => (list.includes(v) ? v : d);
+const isId = v => typeof v === 'string' && /^[a-z0-9]{1,40}$/i.test(v);
+const isDate = v => typeof v === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(v) && !isNaN(fromKey(v));
+const cleanTs = v => (Number.isFinite(+v) && +v > 0 && +v < 8.64e15 ? +v : Date.now());
+function cleanPer(p) { const o = zeroPer(); NUTRIENTS.forEach(k => { o[k] = pos(p?.[k], 100000); }); return o; }
+function cleanIngredients(list) {
+  return arr(list).slice(0, 30).map(i => ({
+    id: isId(i?.id) ? i.id : uid(), name: str(i?.name, 80), amount: str(i?.amount, 60),
+    cal: pos(i?.cal, 100000), protein: pos(i?.protein, 10000), carbs: pos(i?.carbs, 10000), fat: pos(i?.fat, 10000),
+  }));
+}
+function sanitizeState(d) {
+  const b = defaults();
+  const p = d?.profile || {};
+  const g = d?.goals || {};
+  const goals = {};
+  Object.keys(b.goals).forEach(k => { goals[k] = Math.round(clamp(num(g[k]) || b.goals[k], 1, 100000)); });
+  const water = {};
+  Object.entries(d?.water || {}).forEach(([k, v]) => { if (isDate(k)) water[k] = pos(v, 10000); });
+  return {
+    v: 1,
+    onboarded: !!d?.onboarded,
+    profile: {
+      sex: oneOf(p.sex, ['male', 'female', 'other'], b.profile.sex),
+      birth: isDate(p.birth) ? p.birth : b.profile.birth,
+      heightCm: clamp(num(p.heightCm) || b.profile.heightCm, 80, 260),
+      weightKg: clamp(num(p.weightKg) || b.profile.weightKg, 20, 400),
+      goalKg: clamp(num(p.goalKg) || b.profile.goalKg, 20, 400),
+      goal: oneOf(p.goal, ['lose', 'maintain', 'gain'], b.profile.goal),
+      paceKg: clamp(num(p.paceKg) || b.profile.paceKg, 0.1, 1),
+      workouts: oneOf(p.workouts, ['0-2', '3-5', '6+'], b.profile.workouts),
+      units: oneOf(p.units, ['imperial', 'metric'], b.profile.units),
+    },
+    goals,
+    settings: { apiKey: str(d?.settings?.apiKey, 300), addBurned: !!d?.settings?.addBurned, rollover: !!d?.settings?.rollover },
+    entries: arr(d?.entries).slice(0, 20000).map(e => ({
+      id: isId(e?.id) ? e.id : uid(), ts: cleanTs(e?.ts), date: isDate(e?.date) ? e.date : today(), kind: 'food',
+      name: str(e?.name, 80), serving: str(e?.serving, 80), servings: clamp(num(e?.servings) || 1, 0.25, 20),
+      per: cleanPer(e?.per), ingredients: cleanIngredients(e?.ingredients), health: Math.round(clamp(num(e?.health), 0, 10)),
+      source: oneOf(e?.source, ['food', 'label', 'barcode', 'gallery', 'describe', 'db', 'manual'], 'manual'),
+      desc: str(e?.desc, 1000), hasImg: !!e?.hasImg, notes: str(e?.notes, 300), error: str(e?.error, 300),
+      // An analysis cannot survive a reload, so mark any leftovers as failed and offer a retry
+      status: e?.status === 'analyzing' ? 'error' : oneOf(e?.status, ['done', 'error'], 'done'),
+      ...(e?.status === 'analyzing' ? { error: 'Analysis was interrupted. Tap Retry.' } : {}),
+    })),
+    exercise: arr(d?.exercise).slice(0, 20000).map(x => ({
+      id: isId(x?.id) ? x.id : uid(), ts: cleanTs(x?.ts), date: isDate(x?.date) ? x.date : today(),
+      name: str(x?.name, 80) || 'Workout', icon: oneOf(x?.icon, ['🏃', '🏋️', '💪', '🔥'], '🔥'),
+      minutes: pos(x?.minutes, 1440), cal: pos(x?.cal, 20000), intensity: oneOf(x?.intensity, ['', 'Low', 'Medium', 'High'], ''),
+    })),
+    water,
+    weights: arr(d?.weights).filter(w => isDate(w?.date) && num(w?.kg) >= 20 && num(w?.kg) <= 400).map(w => ({ date: w.date, kg: num(w.kg) })),
+    saved: arr(d?.saved).slice(0, 2000).map(s => ({
+      id: isId(s?.id) ? s.id : uid(), from: isId(s?.from) ? s.from : null, name: str(s?.name, 80) || 'Food', serving: str(s?.serving, 80),
+      per: cleanPer(s?.per), ingredients: cleanIngredients(s?.ingredients), health: Math.round(clamp(num(s?.health) || 5, 1, 10)),
+      imgId: isId(s?.imgId) ? s.imgId : null,
+    })),
+  };
+}
 function load() {
   try {
     const raw = localStorage.getItem(KEY);
-    if (!raw) return;
-    const d = JSON.parse(raw);
-    const base = defaults();
-    S = { ...base, ...d, profile: { ...base.profile, ...d.profile }, goals: { ...base.goals, ...d.goals }, settings: { ...base.settings, ...d.settings } };
-    // An analysis cannot survive a reload, so mark any leftovers as failed and offer a retry
-    S.entries.forEach(e => { if (e.status === 'analyzing') { e.status = 'error'; e.error = 'Analysis was interrupted. Tap Retry.'; } });
+    if (raw) S = sanitizeState(JSON.parse(raw));
   } catch { /* start fresh */ }
 }
 function save() {
@@ -1566,11 +1626,10 @@ async function importData(input) {
   try {
     const d = JSON.parse(await f.text());
     if (!d || !Array.isArray(d.entries) || !d.profile || !d.goals) throw new Error();
+    // Keep this device's API key: a backup file never gets to set which key Morsel uses
     const key = S.settings.apiKey;
-    const base = defaults();
-    S = { ...base, ...d, profile: { ...base.profile, ...d.profile }, goals: { ...base.goals, ...d.goals }, settings: { ...base.settings, ...d.settings, apiKey: d.settings?.apiKey || key } };
-    S.entries.forEach(e => { if (e.status === 'analyzing') { e.status = 'error'; e.error = 'Analysis was interrupted. Tap Retry.'; } });
-    save(); refresh(); toast('Backup restored');
+    S = sanitizeState({ ...d, onboarded: true, settings: { ...d.settings, apiKey: key } });
+    save(); closeAllLayers(); refresh(); toast('Backup restored');
   } catch { toast("That file isn't a Morsel backup"); }
 }
 
