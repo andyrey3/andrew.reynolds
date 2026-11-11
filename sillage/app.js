@@ -189,7 +189,13 @@
     const title = document.getElementById('missing-title');
     if (!shelf.length) {
       title.textContent = 'Every family is open';
-      box.replaceChildren(h('p', { class: 'hint' }, 'Add the bottles you own below and they will fill in the wheel. Tap any family to see the best bottles and their dupes.'));
+      box.replaceChildren(
+        h('p', { class: 'hint' }, 'Add the bottles you own below and they will fill in the wheel. Tap any family to see the best bottles and their dupes.'),
+        h('button', { type: 'button', class: 'add-btn try', onclick: () => {
+          [['Sauvage', 'Dior'], ['Libre', 'Yves Saint Laurent'], ['Santal 33', 'Le Labo'], ['Light Blue', 'Dolce & Gabbana'], ['Baccarat Rouge 540', 'Maison Francis Kurkdjian']]
+            .forEach(([n, b]) => { const c = CATALOG.find(x => x.name === n && x.brand === b); if (c) shelf.push({ ...c }); });
+          save(); render(); announce('Added 5 example bottles. Remove them any time.');
+        } }, 'Try it with 5 example bottles'));
       return;
     }
     if (!missing.length) {
