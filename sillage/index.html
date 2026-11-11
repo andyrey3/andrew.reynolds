@@ -132,8 +132,8 @@
 
     .bottles { list-style: none; margin-top: 16px; border-top: 1px solid var(--line); }
     .bottle {
-      display: grid; grid-template-columns: 1fr auto auto; align-items: center; gap: 10px;
-      padding: 11px 0 11px 14px; border-bottom: 1px solid var(--line); position: relative;
+      display: grid; grid-template-columns: auto 1fr auto auto; align-items: center; gap: 12px;
+      padding: 10px 0 10px 14px; border-bottom: 1px solid var(--line); position: relative;
     }
     .bottle::before { content: ""; position: absolute; left: 0; top: 10px; bottom: 10px; width: 4px; border-radius: 2px; background: var(--fam); }
     .bottle-name { display: flex; flex-direction: column; min-width: 0; }
@@ -171,7 +171,7 @@
     .sheet-content h3 { font-size: 1.1rem; font-weight: 600; margin: 26px 0 10px; letter-spacing: -0.01em; }
     .picks { list-style: none; border-top: 1px solid var(--line); }
     .pick { padding: 14px 0; border-bottom: 1px solid var(--line); }
-    .pick-head { display: grid; grid-template-columns: 1fr auto auto; gap: 10px; align-items: center; }
+    .pick-head { display: grid; grid-template-columns: auto 1fr auto auto; gap: 12px; align-items: center; }
     .pick-head strong { display: block; font-weight: 600; font-size: 1.05rem; }
     .brand { color: var(--muted); font-size: .9rem; }
     .notes { color: var(--muted); font-size: .9rem; margin-top: 6px; }
@@ -180,7 +180,7 @@
       display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; margin-top: 10px;
       padding: 9px 10px 9px 12px; border-radius: 12px; background: var(--sunk); font-size: .93rem;
     }
-    .dupe > span:nth-child(2) { font-weight: 600; flex: 1; min-width: 8em; }
+    .dupe-name { font-weight: 600; flex: 1; min-width: 8em; }
     .dupe .add-btn { margin-left: auto; }
     .dupe-tag { color: var(--muted); font-size: .85rem; flex-basis: 100%; }
     .dupe.quiet { color: var(--muted); }
@@ -194,6 +194,19 @@
     .catalog li { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 10px 0; border-bottom: 1px solid var(--line); }
     .catalog li.hint { display: block; border: 0; }
     .try { margin-top: 14px; }
+
+    /* Bottle photos sit on white tiles, like a product shot, in both themes. */
+    .thumb {
+      flex: none; width: 42px; height: 56px; border-radius: 9px; object-fit: contain;
+      background: #FFFFFF; padding: 3px; display: block;
+    }
+    .thumb.sm { width: 34px; height: 45px; border-radius: 7px; padding: 2px; }
+    .thumb.lg { width: 58px; height: 77px; border-radius: 11px; padding: 4px; }
+    .thumb.ph {
+      display: grid; place-items: center; padding: 0; font-weight: 600; font-size: 1.05rem;
+      background: var(--sunk); color: var(--muted); box-shadow: inset 0 -4px 0 var(--fam, var(--line));
+    }
+    .with-thumb { display: flex; align-items: center; gap: 12px; min-width: 0; }
     .fine { color: var(--faint); font-size: .82rem; margin-top: 22px; }
 
     .sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }

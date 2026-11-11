@@ -43,6 +43,18 @@
     return 0.2126 * r + 0.7152 * g + 0.0722 * b > 0.22 ? '#231F2B' : '#FFFFFF';
   }
 
+  // Bottle photo, or a tile in the family's color with the first letter.
+  function thumb(name, brand, family, size) {
+    const id = PHOTO_IDS[brand + '|' + name];
+    const cls = 'thumb' + (size ? ' ' + size : '');
+    if (id) {
+      const src = typeof PHOTO_DATA !== 'undefined' ? PHOTO_DATA[id] : `img/${id}.jpg`;
+      return h('img', { class: cls, src, alt: '', loading: 'lazy', decoding: 'async', width: 120, height: 160 });
+    }
+    const f = FAMILY_BY_ID[family];
+    return h('span', { class: cls + ' ph', 'aria-hidden': 'true', style: f ? `--fam:${f.color}` : '' }, (name[0] || '?').toUpperCase());
+  }
+
   // ---------- state ----------
   function load() {
     try {
@@ -236,6 +248,7 @@
       shelf.forEach((b, i) => {
         if (b.family !== f.id) return;
         rows.push(h('li', { class: 'bottle', style: `--fam:${f.color}` },
+          thumb(b.name, b.brand, b.family),
           h('span', { class: 'bottle-name' }, h('strong', {}, b.name), b.brand ? h('span', {}, b.brand) : null),
           h('label', { class: 'fam-pick' }, h('span', { class: 'swatch', style: `background:${f.color}` }),
             familySelect(b.family, v => moveBottle(i, v), `Family for ${b.name}`)),
@@ -283,7 +296,8 @@
         type: 'button', class: 'result', disabled: have,
         onclick: () => { addBottle(c.name, c.brand, c.family); addInput.value = ''; drawResults(); addInput.focus(); }
       },
-        h('span', { class: 'result-name' }, h('strong', {}, c.name), h('span', {}, c.brand)),
+        h('span', { class: 'with-thumb' }, thumb(c.name, c.brand, c.family, 'sm'),
+          h('span', { class: 'result-name' }, h('strong', {}, c.name), h('span', {}, c.brand))),
         h('span', { class: 'result-fam' }, h('span', { class: 'swatch', style: `background:${f.color}` }), have ? 'On your shelf' : f.name)
       ));
     });
@@ -308,12 +322,14 @@
     const have = owned(p.name, p.brand);
     let dupeLine;
     if (p.dupe && p.dupe.style) {
-      dupeLine = h('p', { class: 'dupe' }, h('span', { class: 'dupe-tag' }, 'Similar style for less'),
-        h('span', {}, `${p.dupe.brand} ${p.dupe.name}`), h('span', { class: 'price', title: priceLabel(p.dupe.price) }, price(p.dupe.price)));
+      dupeLine = h('div', { class: 'dupe' }, h('span', { class: 'dupe-tag' }, 'Similar style for less'),
+        thumb(p.dupe.name, p.dupe.brand, currentFamily, 'sm'),
+        h('span', { class: 'dupe-name' }, `${p.dupe.brand} ${p.dupe.name}`), h('span', { class: 'price', title: priceLabel(p.dupe.price) }, price(p.dupe.price)));
     } else if (p.dupe) {
       const dHave = owned(p.dupe.name, p.dupe.brand);
-      dupeLine = h('p', { class: 'dupe' }, h('span', { class: 'dupe-tag' }, 'Best dupe'),
-        h('span', {}, `${p.dupe.brand} ${p.dupe.name}`), h('span', { class: 'price', title: priceLabel(p.dupe.price) }, price(p.dupe.price)),
+      dupeLine = h('div', { class: 'dupe' }, h('span', { class: 'dupe-tag' }, 'Best dupe'),
+        thumb(p.dupe.name, p.dupe.brand, currentFamily, 'sm'),
+        h('span', { class: 'dupe-name' }, `${p.dupe.brand} ${p.dupe.name}`), h('span', { class: 'price', title: priceLabel(p.dupe.price) }, price(p.dupe.price)),
         addBtn(p.dupe.name, p.dupe.brand, dHave));
     } else if (p.cheap) {
       dupeLine = h('p', { class: 'dupe quiet' }, 'Already affordable, so there is no need for a dupe.');
@@ -322,6 +338,7 @@
     }
     return h('li', { class: 'pick' },
       h('div', { class: 'pick-head' },
+        thumb(p.name, p.brand, currentFamily, 'lg'),
         h('div', {}, h('strong', {}, p.name), h('span', { class: 'brand' }, p.brand)),
         h('span', { class: 'price', title: priceLabel(p.price) }, price(p.price)),
         addBtn(p.name, p.brand, have)),
@@ -355,7 +372,8 @@
       const q = sheetQuery.trim();
       const list = q ? matches(q, pool) : pool;
       searchList.replaceChildren(...(list.length ? list.map(c => h('li', {},
-        h('span', { class: 'result-name' }, h('strong', {}, c.name), h('span', {}, c.brand)),
+        h('span', { class: 'with-thumb' }, thumb(c.name, c.brand, c.family, 'sm'),
+          h('span', { class: 'result-name' }, h('strong', {}, c.name), h('span', {}, c.brand))),
         addBtn(c.name, c.brand, owned(c.name, c.brand))))
         : [h('li', { class: 'hint' }, `No ${f.name.toLowerCase()} bottles match “${q}”. Add it from Your shelf to choose its family yourself.`)]));
     };
