@@ -302,7 +302,7 @@
 
   // ---------- family sheet ----------
   const sheet = document.getElementById('sheet');
-  const sheetBody = document.getElementById('sheet-body');
+  const app = document.getElementById('app');
 
   function pickRow(p) {
     const have = owned(p.name, p.brand);
@@ -366,8 +366,9 @@
       oninput: e => { sheetQuery = e.target.value; fillSearch(); }
     });
 
-    sheetBody.replaceChildren(
+    sheet.replaceChildren(
       h('header', { class: 'sheet-head' },
+        h('button', { id: 'sheet-close', type: 'button', onclick: closeFamily }, '‹ All families'),
         h('p', { class: 'sheet-group' }, `${g.name} side of the wheel`),
         h('h2', { id: 'sheet-title' }, f.name),
         h('p', { class: 'sheet-status' }, mine.length ? `You own ${mine.length}: ${mine.map(b => b.name).join(', ')}` : 'Missing from your collection')),
@@ -390,18 +391,22 @@
     selected = id;
     drawWheel();
     renderSheet();
-    if (!sheet.open) sheet.showModal();
-    sheet.querySelector('.sheet-content').scrollTop = 0;
-    sheet.scrollTop = 0;
+    sheet.hidden = false;
+    app.classList.add('detail');
+    const wide = matchMedia('(min-width: 900px)').matches;
+    (wide ? sheet : app).scrollIntoView({ block: 'start' });
+    document.getElementById('sheet-close').focus({ preventScroll: true });
   }
-  sheet.addEventListener('close', () => {
+  function closeFamily() {
+    sheet.hidden = true;
+    app.classList.remove('detail');
     selected = null;
     drawWheel();
     const seg = wheelEl.querySelectorAll('.seg')[FAMILIES.findIndex(f => f.id === currentFamily)];
+    wheelEl.scrollIntoView({ block: 'start' });
     seg?.focus({ preventScroll: true });
-  });
-  document.getElementById('sheet-close').addEventListener('click', () => sheet.close());
-  sheet.addEventListener('click', e => { if (e.target === sheet) sheet.close(); });
+  }
+  document.addEventListener('keydown', e => { if (e.key === 'Escape' && !sheet.hidden && document.activeElement !== addInput) closeFamily(); });
 
   // ---------- misc ----------
   const live = document.getElementById('live');
@@ -411,7 +416,7 @@
     drawWheel();
     drawMissing();
     drawShelf();
-    if (sheet.open) renderSheet();
+    if (!sheet.hidden) renderSheet();
   }
   render();
 
