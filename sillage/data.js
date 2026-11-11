@@ -194,7 +194,7 @@ const CATALOG_EXTRA = [
   ['Hypnotic Poison', 'Dior', 'amber'], ['Vanilla 28', 'Kayali', 'amber'],
   ['Angel', 'Mugler', 'amber'], ['Code Profumo', 'Giorgio Armani', 'amber'],
   ['Eros', 'Versace', 'aromatic'], ['Le Male Elixir', 'Jean Paul Gaultier', 'amber'],
-  ['Stronger With You', 'Emporio Armani', 'amber'], ['Valentino Uomo Born in Roma', 'Valentino', 'aromatic'],
+  ['Stronger With You', 'Emporio Armani', 'amber'], ['Uomo Born in Roma', 'Valentino', 'woods'],
   ['La Vie est Belle', 'Lancôme', 'softamber'], ['Flowerbomb', 'Viktor & Rolf', 'softamber'],
   ['Good Girl', 'Carolina Herrera', 'softamber'], ['Candy', 'Prada', 'softamber'],
   ['Cheirosa 62', 'Sol de Janeiro', 'softamber'], ['Yara', 'Lattafa', 'softamber'],
@@ -227,7 +227,11 @@ const CATALOG_EXTRA = [
   ['Portrait of a Lady', 'Frédéric Malle', 'mossywoods'], ['Grand Soir', 'Maison Francis Kurkdjian', 'amber'],
   ['By the Fireplace', 'Maison Margiela', 'drywoods'], ['Fahrenheit', 'Dior', 'drywoods'],
   ['Bal d\'Afrique', 'Byredo', 'woods'], ['Tobacco Oud', 'Tom Ford', 'drywoods'],
-  ['Oud Ispahan', 'Dior', 'drywoods'], ['Tuscan Leather Intense', 'Tom Ford', 'drywoods']
+  ['Oud Ispahan', 'Dior', 'drywoods'], ['Tuscan Leather Intense', 'Tom Ford', 'drywoods'],
+  ['Boss Bottled Unlimited', 'Hugo Boss', 'aromatic'], ['Boss Bottled', 'Hugo Boss', 'aromatic'],
+  ['Light Blue Pour Homme', 'Dolce & Gabbana', 'citrus'], ['Blue Jeans', 'Versace', 'aromatic'],
+  ['Intense Oud', 'Gucci', 'woodyamber'], ['Bleu de Chanel Eau de Parfum', 'Chanel', 'woods'],
+  ['Allure Homme Sport Eau Extrême', 'Chanel', 'aromatic'], ['Uomo Born in Roma Intense', 'Valentino', 'amber']
 ];
 
 const CATALOG = (() => {
