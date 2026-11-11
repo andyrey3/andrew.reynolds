@@ -88,6 +88,8 @@
     lastAdded = family;
     render();
     announce(`Added ${name}. ${FAMILY_BY_ID[family].name} is on your wheel.`);
+    const st = document.getElementById('add-status');
+    st.replaceChildren('Added ', h('strong', {}, name), ` to ${FAMILY_BY_ID[family].name}.`);
   }
   function removeBottle(i) {
     const b = shelf[i];
@@ -212,7 +214,7 @@
     if (!shelf.length) {
       title.textContent = 'Every family is open';
       box.replaceChildren(
-        h('p', { class: 'hint' }, 'Add the bottles you own below and they will fill in the wheel. Tap any family to see the best bottles and their dupes.'),
+        h('p', { class: 'hint' }, 'Add the bottles you own above and they will fill in the wheel. Tap any family to see the best bottles and their dupes.'),
         h('button', { type: 'button', class: 'add-btn try', onclick: () => {
           [['Sauvage', 'Dior'], ['Libre', 'Yves Saint Laurent'], ['Santal 33', 'Le Labo'], ['Light Blue', 'Dolce & Gabbana'], ['Baccarat Rouge 540', 'Maison Francis Kurkdjian']]
             .forEach(([n, b]) => { const c = findCatalog(n, b); if (c) shelf.push({ ...c, manual: false }); });
@@ -250,7 +252,7 @@
     const list = document.getElementById('shelf');
     document.getElementById('shelf-count').textContent = shelf.length ? `${shelf.length} ${shelf.length === 1 ? 'bottle' : 'bottles'}` : '';
     if (!shelf.length) {
-      list.replaceChildren(h('p', { class: 'hint' }, 'Nothing here yet. Search for a bottle you own to place it on the wheel.'));
+      list.replaceChildren(h('p', { class: 'hint' }, 'Nothing here yet. Use Add a fragrance to put your first bottle on the wheel.'));
       return;
     }
     const rows = [];
@@ -314,8 +316,9 @@
         onclick: () => { addBottle(c.name, c.brand, c.frag); addInput.value = ''; drawResults(); addInput.focus(); }
       },
         h('span', { class: 'with-thumb' }, thumb(c.name, c.brand, c.family, 'sm'),
-          h('span', { class: 'result-name' }, h('strong', {}, c.name), h('span', {}, c.brand), h('span', { class: 'frag' }, c.frag))),
-        h('span', { class: 'result-fam' }, h('span', { class: 'swatch', style: `background:${f.color}` }), have ? 'On your shelf' : f.name)
+          h('span', { class: 'result-name' }, h('strong', {}, c.name), h('span', {}, c.brand),
+            h('span', { class: 'frag fam-line' }, h('span', { class: 'swatch', style: `background:${f.color}` }), `${c.frag}, goes in ${f.name}`))),
+        h('span', { class: 'add-btn' + (have ? ' done' : '') }, have ? 'Owned' : 'Add')
       ));
     });
     items.push(h('li', {}, h('button', {
@@ -325,7 +328,7 @@
     results.replaceChildren(h('ul', {}, items));
     results.hidden = false;
   }
-  addInput.addEventListener('input', () => { pendingCustom = null; drawResults(); });
+  addInput.addEventListener('input', () => { pendingCustom = null; document.getElementById('add-status').textContent = ''; drawResults(); });
   addInput.addEventListener('keydown', e => {
     if (e.key === 'Enter') { e.preventDefault(); results.querySelector('button:not([disabled])')?.click(); }
     if (e.key === 'Escape') { addInput.value = ''; pendingCustom = null; drawResults(); }
@@ -392,7 +395,7 @@
         h('span', { class: 'with-thumb' }, thumb(c.name, c.brand, c.family, 'sm'),
           h('span', { class: 'result-name' }, h('strong', {}, c.name), h('span', {}, c.brand), h('span', { class: 'frag' }, c.frag))),
         addBtn(c.name, c.brand, owned(c.name, c.brand))))
-        : [h('li', { class: 'hint' }, `No ${f.name.toLowerCase()} bottles match “${q}”. Add it from Your shelf and pick the family Fragrantica lists for it.`)]));
+        : [h('li', { class: 'hint' }, `No ${f.name.toLowerCase()} bottles match “${q}”. Use Add a fragrance on the main page and pick the family Fragrantica lists for it.`)]));
     };
     fillSearch();
     const search = h('input', {
