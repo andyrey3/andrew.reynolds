@@ -56,13 +56,20 @@
   }
 
   // ---------- state ----------
+  const findCatalog = (name, brand) => CATALOG.find(x => keyOf(x.name, x.brand) === keyOf(name, brand));
   function load() {
     try {
       const raw = JSON.parse(localStorage.getItem(STORE) || '[]');
       if (!Array.isArray(raw)) return [];
       return raw.filter(b => b && typeof b.name === 'string' && typeof b.brand === 'string' &&
         b.name.length > 0 && b.name.length <= 120 && b.brand.length <= 80 && FAMILY_BY_ID[b.family])
-        .map(b => ({ name: b.name, brand: b.brand, family: b.family }));
+        .map(b => {
+          const c = findCatalog(b.name, b.brand);
+          const frag = c ? c.frag : (typeof b.frag === 'string' && FRAG_FAMILY[b.frag] ? b.frag : null);
+          const manual = b.manual === true;
+          const family = manual || !frag ? b.family : FRAG_FAMILY[frag];
+          return { name: b.name, brand: b.brand, family, frag, manual };
+        });
     } catch { return []; }
   }
   let shelf = load();
@@ -72,9 +79,11 @@
   const owned = (name, brand) => shelf.some(b => keyOf(b.name, b.brand) === keyOf(name, brand));
   const inFamily = id => shelf.filter(b => b.family === id);
 
-  function addBottle(name, brand, family) {
+  // A bottle's family comes from its Fragrantica family when one is known.
+  function addBottle(name, brand, frag, fallbackFamily) {
     if (owned(name, brand)) return;
-    shelf.push({ name, brand, family });
+    const family = frag ? FRAG_FAMILY[frag] : fallbackFamily;
+    shelf.push({ name, brand, family, frag: frag || null, manual: !frag });
     save();
     lastAdded = family;
     render();
@@ -89,6 +98,7 @@
   }
   function moveBottle(i, family) {
     shelf[i].family = family;
+    shelf[i].manual = !shelf[i].frag || FRAG_FAMILY[shelf[i].frag] !== family;
     save();
     lastAdded = family;
     render();
@@ -205,7 +215,7 @@
         h('p', { class: 'hint' }, 'Add the bottles you own below and they will fill in the wheel. Tap any family to see the best bottles and their dupes.'),
         h('button', { type: 'button', class: 'add-btn try', onclick: () => {
           [['Sauvage', 'Dior'], ['Libre', 'Yves Saint Laurent'], ['Santal 33', 'Le Labo'], ['Light Blue', 'Dolce & Gabbana'], ['Baccarat Rouge 540', 'Maison Francis Kurkdjian']]
-            .forEach(([n, b]) => { const c = CATALOG.find(x => x.name === n && x.brand === b); if (c) shelf.push({ ...c }); });
+            .forEach(([n, b]) => { const c = findCatalog(n, b); if (c) shelf.push({ ...c, manual: false }); });
           save(); render(); announce('Added 5 example bottles. Remove them any time.');
         } }, 'Try it with 5 example bottles'));
       return;
@@ -249,7 +259,10 @@
         if (b.family !== f.id) return;
         rows.push(h('li', { class: 'bottle', style: `--fam:${f.color}` },
           thumb(b.name, b.brand, b.family),
-          h('span', { class: 'bottle-name' }, h('strong', {}, b.name), b.brand ? h('span', {}, b.brand) : null),
+          h('span', { class: 'bottle-name' }, h('strong', {}, b.name), b.brand ? h('span', {}, b.brand) : null,
+            h('span', { class: 'frag' }, b.frag
+              ? (b.manual ? `Fragrantica: ${b.frag}. Moved by you.` : `Fragrantica: ${b.frag}`)
+              : 'No Fragrantica family on file')),
           h('label', { class: 'fam-pick' }, h('span', { class: 'swatch', style: `background:${f.color}` }),
             familySelect(b.family, v => moveBottle(i, v), `Family for ${b.name}`)),
           h('button', { class: 'remove', type: 'button', 'aria-label': `Remove ${b.name}`, onclick: () => removeBottle(i) }, '×')
@@ -276,12 +289,16 @@
   function drawResults() {
     const q = addInput.value.trim();
     if (pendingCustom) {
+      const fragNames = Object.keys(FRAG_FAMILY).filter(k => !k.startsWith('Amber'));
       results.replaceChildren(h('div', { class: 'custom' },
-        h('p', {}, `Which family does ${pendingCustom} smell closest to?`),
-        h('div', { class: 'fam-grid' }, FAMILIES.map(f => h('button', {
-          type: 'button', class: 'fam-chip', style: `--fam:${f.color}`,
-          onclick: () => { addBottle(pendingCustom, '', f.id); pendingCustom = null; addInput.value = ''; drawResults(); addInput.focus(); }
-        }, h('span', { class: 'swatch', style: `background:${f.color}` }), f.name))),
+        h('p', {}, `Look up ${pendingCustom} on Fragrantica. Its page says “… is a Woody Aromatic fragrance” or similar. Pick that family:`),
+        h('div', { class: 'fam-grid' }, fragNames.map(k => {
+          const f = FAMILY_BY_ID[FRAG_FAMILY[k]];
+          return h('button', {
+            type: 'button', class: 'fam-chip', style: `--fam:${f.color}`, title: `Goes in ${f.name}`,
+            onclick: () => { addBottle(pendingCustom, '', k); pendingCustom = null; addInput.value = ''; drawResults(); addInput.focus(); }
+          }, h('span', { class: 'swatch', style: `background:${f.color}` }), k);
+        })),
         h('button', { type: 'button', class: 'text-btn', onclick: () => { pendingCustom = null; drawResults(); addInput.focus(); } }, 'Cancel')
       ));
       results.hidden = false;
@@ -294,10 +311,10 @@
       const have = owned(c.name, c.brand);
       return h('li', {}, h('button', {
         type: 'button', class: 'result', disabled: have,
-        onclick: () => { addBottle(c.name, c.brand, c.family); addInput.value = ''; drawResults(); addInput.focus(); }
+        onclick: () => { addBottle(c.name, c.brand, c.frag); addInput.value = ''; drawResults(); addInput.focus(); }
       },
         h('span', { class: 'with-thumb' }, thumb(c.name, c.brand, c.family, 'sm'),
-          h('span', { class: 'result-name' }, h('strong', {}, c.name), h('span', {}, c.brand))),
+          h('span', { class: 'result-name' }, h('strong', {}, c.name), h('span', {}, c.brand), h('span', { class: 'frag' }, c.frag))),
         h('span', { class: 'result-fam' }, h('span', { class: 'swatch', style: `background:${f.color}` }), have ? 'On your shelf' : f.name)
       ));
     });
@@ -339,7 +356,7 @@
     return h('li', { class: 'pick' },
       h('div', { class: 'pick-head' },
         thumb(p.name, p.brand, currentFamily, 'lg'),
-        h('div', {}, h('strong', {}, p.name), h('span', { class: 'brand' }, p.brand)),
+        h('div', {}, h('strong', {}, p.name), h('span', { class: 'brand' }, p.brand), h('span', { class: 'frag' }, `Fragrantica: ${p.frag}`)),
         h('span', { class: 'price', title: priceLabel(p.price) }, price(p.price)),
         addBtn(p.name, p.brand, have)),
       h('p', { class: 'notes' }, p.notes),
@@ -350,8 +367,8 @@
       type: 'button', class: 'add-btn' + (have ? ' done' : ''), disabled: have,
       'aria-label': have ? `${name} is on your shelf` : `Add ${name} to your shelf`,
       onclick: () => {
-        const c = CATALOG.find(x => keyOf(x.name, x.brand) === keyOf(name, brand));
-        addBottle(name, brand, c ? c.family : currentFamily);
+        const c = findCatalog(name, brand);
+        addBottle(name, brand, c ? c.frag : null, currentFamily);
         renderSheet();
       }
     }, have ? 'Owned' : 'Add');
@@ -373,9 +390,9 @@
       const list = q ? matches(q, pool) : pool;
       searchList.replaceChildren(...(list.length ? list.map(c => h('li', {},
         h('span', { class: 'with-thumb' }, thumb(c.name, c.brand, c.family, 'sm'),
-          h('span', { class: 'result-name' }, h('strong', {}, c.name), h('span', {}, c.brand))),
+          h('span', { class: 'result-name' }, h('strong', {}, c.name), h('span', {}, c.brand), h('span', { class: 'frag' }, c.frag))),
         addBtn(c.name, c.brand, owned(c.name, c.brand))))
-        : [h('li', { class: 'hint' }, `No ${f.name.toLowerCase()} bottles match “${q}”. Add it from Your shelf to choose its family yourself.`)]));
+        : [h('li', { class: 'hint' }, `No ${f.name.toLowerCase()} bottles match “${q}”. Add it from Your shelf and pick the family Fragrantica lists for it.`)]));
     };
     fillSearch();
     const search = h('input', {
@@ -393,12 +410,14 @@
       h('div', { class: 'sheet-content' },
         h('p', { class: 'smells' }, f.smells),
         h('p', { class: 'wear' }, f.wear),
+        h('p', { class: 'frag-map' }, 'Fragrantica families in this group: ',
+          Object.keys(FRAG_FAMILY).filter(k => FRAG_FAMILY[k] === f.id && !k.startsWith('Amber')).join(', ')),
         h('h3', {}, `Best ${f.name.toLowerCase()} fragrances`),
         h('ul', { class: 'picks' }, f.picks.map(pickRow)),
         h('h3', {}, `More ${f.name.toLowerCase()} bottles`),
         search,
         searchList,
-        h('p', { class: 'fine' }, 'Dupes come from community comparisons and vary by batch. Prices: $ budget to $$$$ niche.')
+        h('p', { class: 'fine' }, 'Families and notes are from each bottle’s Fragrantica listing. Dupes come from community comparisons and vary by batch. Price levels are rough estimates, from $ budget to $$$$ niche. Bottles with no dupe shown have no well-known close match.')
       )
     );
   }
