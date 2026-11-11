@@ -68,7 +68,8 @@
           const frag = c ? c.frag : (typeof b.frag === 'string' && FRAG_FAMILY[b.frag] ? b.frag : null);
           const manual = b.manual === true;
           const family = manual || !frag ? b.family : FRAG_FAMILY[frag];
-          return { name: b.name, brand: b.brand, family, frag, manual };
+          const src = !c && (b.src === 'claude' || b.src === 'you') ? b.src : null;
+          return { name: b.name, brand: b.brand, family, frag, manual, src };
         });
     } catch { return []; }
   }
@@ -80,10 +81,10 @@
   const inFamily = id => shelf.filter(b => b.family === id);
 
   // A bottle's family comes from its Fragrantica family when one is known.
-  function addBottle(name, brand, frag, fallbackFamily) {
+  function addBottle(name, brand, frag, fallbackFamily, src) {
     if (owned(name, brand)) return;
     const family = frag ? FRAG_FAMILY[frag] : fallbackFamily;
-    shelf.push({ name, brand, family, frag: frag || null, manual: !frag });
+    shelf.push({ name, brand, family, frag: frag || null, manual: !frag, src: src || null });
     save();
     lastAdded = family;
     render();
@@ -263,7 +264,9 @@
           thumb(b.name, b.brand, b.family),
           h('span', { class: 'bottle-name' }, h('strong', {}, b.name), b.brand ? h('span', {}, b.brand) : null,
             h('span', { class: 'frag' }, b.frag
-              ? (b.manual ? `Fragrantica: ${b.frag}. Moved by you.` : `Fragrantica: ${b.frag}`)
+              ? (b.manual ? `Fragrantica: ${b.frag}. Moved by you.`
+                : b.src === 'claude' ? `Fragrantica: ${b.frag} (looked up by Claude)`
+                : b.src === 'you' ? `Fragrantica: ${b.frag} (chosen by you)` : `Fragrantica: ${b.frag}`)
               : 'No Fragrantica family on file')),
           h('label', { class: 'fam-pick' }, h('span', { class: 'swatch', style: `background:${f.color}` }),
             familySelect(b.family, v => moveBottle(i, v), `Family for ${b.name}`)),
@@ -278,6 +281,62 @@
   const addInput = document.getElementById('add');
   const results = document.getElementById('add-results');
   let pendingCustom = null;
+  let lookup = null;        // { q, status: 'loading' | 'found' | 'unsure' | 'error', res, ctl }
+  let pickYourself = false; // show the Fragrantica family chooser
+  let sampler = null;       // Claude, when this page is opened inside Claude
+  if (window.claude && typeof window.claude.use === 'function') {
+    window.claude.use('sample').then(s => { sampler = s; }).catch(() => {});
+  }
+  const fragSearchUrl = q => 'https://www.fragrantica.com/search/?query=' + encodeURIComponent(q);
+
+  function resetAdd() {
+    lookup?.ctl?.abort();
+    lookup = null; pendingCustom = null; pickYourself = false;
+  }
+  function finishAdd() { resetAdd(); addInput.value = ''; drawResults(); addInput.focus(); }
+
+  // Ask Claude which bottle the typed name is and which family Fragrantica lists for it.
+  function startLookup(q) {
+    const ctl = new AbortController();
+    lookup = { q, status: 'loading', ctl };
+    drawResults();
+    const families = Object.keys(FRAG_FAMILY).join(', ');
+    const prompt = 'You are looking up a fragrance on Fragrantica (fragrantica.com). '
+      + 'Each Fragrantica perfume page says "<Name> by <Brand> is a <Family> fragrance for men/women". '
+      + `The user typed: "${q.slice(0, 120)}".\n`
+      + 'Identify the most likely exact fragrance (its full name and brand as Fragrantica lists them) and the olfactory family Fragrantica gives it. '
+      + `Use exactly one of these family names: ${families}. `
+      + 'Set "confident" to false if you cannot tell which fragrance is meant or do not know how Fragrantica classifies it; do not guess a family in that case.\n'
+      + 'Reply with only JSON: {"name": string, "brand": string, "frag": string, "confident": boolean}';
+    sampler.json(prompt, { signal: ctl.signal, cache: { gcTime: 86400000 } }).then(res => {
+      if (lookup?.ctl !== ctl) return;
+      const ok = res && typeof res.name === 'string' && res.name.trim() && typeof res.brand === 'string'
+        && typeof res.frag === 'string' && FRAG_FAMILY[res.frag];
+      const clean = ok ? { name: res.name.trim().slice(0, 120), brand: res.brand.trim().slice(0, 80), frag: res.frag } : null;
+      lookup = { q, ctl, res: clean, status: clean && res.confident === true ? 'found' : 'unsure' };
+      drawResults();
+    }).catch(e => {
+      if (lookup?.ctl !== ctl || e?.code === 'cancelled') return;
+      if (['not_granted', 'sampling_disabled', 'not_declared', 'capability_disabled', 'capability_removed'].includes(e?.code)) sampler = null;
+      lookup = { q, ctl, status: 'error', code: e?.code };
+      drawResults();
+    });
+  }
+
+  function familyChooser(name) {
+    const fragNames = Object.keys(FRAG_FAMILY).filter(k => !k.startsWith('Amber'));
+    return [
+      h('p', {}, 'Open ', h('a', { href: fragSearchUrl(name), target: '_blank', rel: 'noopener' }, `${name} on Fragrantica`),
+        '. Its page says “… is a Woody Aromatic fragrance” or similar. Pick that family:'),
+      h('div', { class: 'fam-grid' }, fragNames.map(k => {
+        const f = FAMILY_BY_ID[FRAG_FAMILY[k]];
+        return h('button', {
+          type: 'button', class: 'fam-chip', style: `--fam:${f.color}`, title: `Goes in ${f.name}`,
+          onclick: () => { addBottle(name, lookup?.res?.name === name ? lookup.res.brand : '', k, null, 'you'); finishAdd(); }
+        }, h('span', { class: 'swatch', style: `background:${f.color}` }), k);
+      }))
+    ];
+  }
 
   function matches(q, pool) {
     const words = norm(q).split(' ').filter(Boolean);
@@ -291,18 +350,34 @@
   function drawResults() {
     const q = addInput.value.trim();
     if (pendingCustom) {
-      const fragNames = Object.keys(FRAG_FAMILY).filter(k => !k.startsWith('Amber'));
-      results.replaceChildren(h('div', { class: 'custom' },
-        h('p', {}, `Look up ${pendingCustom} on Fragrantica. Its page says “… is a Woody Aromatic fragrance” or similar. Pick that family:`),
-        h('div', { class: 'fam-grid' }, fragNames.map(k => {
-          const f = FAMILY_BY_ID[FRAG_FAMILY[k]];
-          return h('button', {
-            type: 'button', class: 'fam-chip', style: `--fam:${f.color}`, title: `Goes in ${f.name}`,
-            onclick: () => { addBottle(pendingCustom, '', k); pendingCustom = null; addInput.value = ''; drawResults(); addInput.focus(); }
-          }, h('span', { class: 'swatch', style: `background:${f.color}` }), k);
-        })),
-        h('button', { type: 'button', class: 'text-btn', onclick: () => { pendingCustom = null; drawResults(); addInput.focus(); } }, 'Cancel')
-      ));
+      const cancel = h('button', { type: 'button', class: 'text-btn', onclick: () => { resetAdd(); drawResults(); addInput.focus(); } }, 'Cancel');
+      let body;
+      if (lookup?.status === 'loading') {
+        body = [h('p', { class: 'looking' }, `Looking up how Fragrantica lists “${lookup.q}”…`)];
+      } else if (lookup?.status === 'found' && !pickYourself) {
+        const r = lookup.res, f = FAMILY_BY_ID[FRAG_FAMILY[r.frag]];
+        const have = owned(r.name, r.brand);
+        body = [
+          h('div', { class: 'match' },
+            thumb(r.name, r.brand, f.id, 'sm'),
+            h('span', { class: 'result-name' }, h('strong', {}, r.name), h('span', {}, r.brand),
+              h('span', { class: 'frag fam-line' }, h('span', { class: 'swatch', style: `background:${f.color}` }), `Fragrantica: ${r.frag}, goes in ${f.name}`))),
+          h('div', { class: 'match-actions' },
+            h('button', { type: 'button', class: 'add-btn', disabled: have,
+              onclick: () => { addBottle(r.name, r.brand, r.frag, null, 'claude'); finishAdd(); } }, have ? 'Already on your shelf' : 'Add to shelf'),
+            h('a', { class: 'text-btn', href: fragSearchUrl(r.name + ' ' + r.brand), target: '_blank', rel: 'noopener' }, 'Check on Fragrantica'),
+            h('button', { type: 'button', class: 'text-btn', onclick: () => { pickYourself = true; drawResults(); } }, 'Wrong family?')),
+          h('p', { class: 'fine' }, 'Claude answered from what it knows of Fragrantica’s listings. It can’t open the site live, so check new or rare bottles.')
+        ];
+      } else {
+        const lead = lookup?.status === 'unsure'
+          ? h('p', {}, lookup.res ? `Claude isn’t sure how Fragrantica lists this. Its best guess is ${lookup.res.name} by ${lookup.res.brand}, ${lookup.res.frag}.` : 'Claude couldn’t tell which fragrance this is.')
+          : lookup?.status === 'error'
+            ? h('p', {}, lookup.code === 'rate_limited' ? 'Claude is busy right now. Pick the family yourself, or try again in a minute.' : 'Claude couldn’t look this one up.')
+            : null;
+        body = [lead, ...familyChooser(lookup?.res?.name || pendingCustom)];
+      }
+      results.replaceChildren(h('div', { class: 'custom' }, ...body, cancel));
       results.hidden = false;
       return;
     }
@@ -323,15 +398,15 @@
     });
     items.push(h('li', {}, h('button', {
       type: 'button', class: 'result custom-row',
-      onclick: () => { pendingCustom = q; drawResults(); }
-    }, `Add “${q}” and choose its family`)));
+      onclick: () => { pendingCustom = q; if (sampler) startLookup(q); else drawResults(); }
+    }, sampler ? `Look up “${q}” and add it` : `Add “${q}” and choose its family`)));
     results.replaceChildren(h('ul', {}, items));
     results.hidden = false;
   }
-  addInput.addEventListener('input', () => { pendingCustom = null; document.getElementById('add-status').textContent = ''; drawResults(); });
+  addInput.addEventListener('input', () => { resetAdd(); document.getElementById('add-status').textContent = ''; drawResults(); });
   addInput.addEventListener('keydown', e => {
-    if (e.key === 'Enter') { e.preventDefault(); results.querySelector('button:not([disabled])')?.click(); }
-    if (e.key === 'Escape') { addInput.value = ''; pendingCustom = null; drawResults(); }
+    if (e.key === 'Enter') { e.preventDefault(); if (lookup?.status !== 'loading') results.querySelector('button:not([disabled])')?.click(); }
+    if (e.key === 'Escape') { addInput.value = ''; resetAdd(); drawResults(); }
   });
 
   // ---------- family sheet ----------
