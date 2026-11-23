@@ -1,0 +1,239 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; media-src 'self' blob: mediastream:; connect-src 'self'; worker-src 'self'; manifest-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="default">
+  <meta name="apple-mobile-web-app-title" content="Contour">
+  <meta name="theme-color" content="#f6f1ea">
+  <meta name="description" content="Find your face shape from a selfie and get hairstyles, glasses and grooming that suit it">
+  <link rel="manifest" href="manifest.json">
+  <link rel="apple-touch-icon" href="icon-192.png">
+  <title>Contour Face Shape</title>
+  <style>
+    :root {
+      --bg: #f6f1ea; --surface: #fffdf9; --surface-2: #efe7dc; --border: #e3d8ca;
+      --text: #1d1a17; --muted: #6c625a; --faint: #a89c90;
+      --accent: #d4553a; --accent-2: #f08a5d; --accent-soft: rgba(212, 85, 58, .12);
+      --good: #2f8f6b; --good-soft: rgba(47, 143, 107, .12); --bad: #b8433a; --bad-soft: rgba(184, 67, 58, .1);
+      --shadow: 0 1px 2px rgba(60, 40, 20, .06), 0 6px 20px rgba(60, 40, 20, .06);
+      --radius: 18px;
+      --safe-b: env(safe-area-inset-bottom, 0px); --safe-t: env(safe-area-inset-top, 0px);
+    }
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --bg: #161311; --surface: #211d1a; --surface-2: #2b2622; --border: #3a332d;
+        --text: #f5eee6; --muted: #b3a79b; --faint: #7d7269;
+        --accent: #f0785a; --accent-2: #f5a36f; --accent-soft: rgba(240, 120, 90, .16);
+        --good: #5cc79c; --good-soft: rgba(92, 199, 156, .14); --bad: #f07f72; --bad-soft: rgba(240, 127, 114, .12);
+        --shadow: none;
+      }
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
+    html, body { height: 100%; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: var(--bg); color: var(--text); line-height: 1.45;
+      overscroll-behavior: none;
+    }
+    button { font: inherit; color: inherit; background: none; border: 0; cursor: pointer; }
+    svg { display: block; }
+    .hidden { display: none !important; }
+
+    /* Layout */
+    .tab { position: fixed; inset: 0 0 calc(64px + var(--safe-b)); overflow-y: auto; padding: calc(16px + var(--safe-t)) 16px 32px; }
+    .wrap { max-width: 520px; margin: 0 auto; }
+    nav.bar {
+      position: fixed; left: 0; right: 0; bottom: 0; height: calc(64px + var(--safe-b)); padding-bottom: var(--safe-b);
+      display: flex; background: var(--surface); border-top: 1px solid var(--border); z-index: 5;
+    }
+    nav.bar button { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px; font-size: .72rem; color: var(--faint); font-weight: 600; }
+    nav.bar button svg { width: 24px; height: 24px; }
+    nav.bar button.on { color: var(--accent); }
+
+    header.top { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 18px; }
+    header.top h1 { font-size: 1.6rem; letter-spacing: -.02em; }
+    .eyebrow { font-size: .72rem; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; color: var(--accent); }
+    .muted { color: var(--muted); }
+    .small { font-size: .88rem; }
+    .icon-btn { width: 40px; height: 40px; border-radius: 50%; display: grid; place-items: center; background: var(--surface); border: 1px solid var(--border); flex: none; }
+    .icon-btn svg { width: 20px; height: 20px; }
+
+    .card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 18px; margin-bottom: 14px; box-shadow: var(--shadow); }
+    .card h3 { font-size: 1.02rem; margin-bottom: 10px; display: flex; align-items: center; gap: 8px; }
+    .card h3 svg { width: 20px; height: 20px; color: var(--accent); }
+
+    .btn { display: inline-flex; align-items: center; justify-content: center; gap: 8px; padding: 14px 20px; border-radius: 999px; font-weight: 700; font-size: 1rem; }
+    .btn svg { width: 20px; height: 20px; }
+    .btn.primary { background: linear-gradient(135deg, var(--accent), var(--accent-2)); color: #fff; }
+    .btn.ghost { background: var(--surface-2); }
+    .btn.block { width: 100%; }
+    .btn.sm { padding: 10px 16px; font-size: .9rem; }
+    .row-btns { display: flex; gap: 10px; }
+    .row-btns .btn { flex: 1; }
+
+    /* Home */
+    .hero { text-align: center; padding: 22px 18px 20px; }
+    .hero .shapes-strip { display: flex; justify-content: center; gap: 6px; margin: 4px 0 18px; }
+    .hero .shapes-strip svg { width: 34px; height: 41px; }
+    .hero h2 { font-size: 1.45rem; letter-spacing: -.02em; margin-bottom: 6px; }
+    .hero p { margin-bottom: 18px; }
+    .tips { list-style: none; display: grid; gap: 10px; }
+    .tips li { display: flex; gap: 10px; align-items: flex-start; font-size: .92rem; }
+    .tips li svg { width: 20px; height: 20px; color: var(--good); flex: none; margin-top: 1px; }
+    .history { display: grid; gap: 10px; }
+    .hist { display: flex; align-items: center; gap: 12px; padding: 10px; border-radius: 14px; background: var(--surface-2); text-align: left; width: 100%; }
+    .hist img { width: 52px; height: 65px; object-fit: cover; border-radius: 10px; }
+    .hist b { display: block; }
+    .hist .chev { margin-left: auto; color: var(--faint); width: 18px; height: 18px; }
+
+    /* Result */
+    .photo { position: relative; border-radius: var(--radius); overflow: hidden; background: #000; aspect-ratio: 4 / 5; margin-bottom: 14px; }
+    .photo img, .photo svg.ov { position: absolute; inset: 0; width: 100%; height: 100%; }
+    .photo svg.ov .outline { fill: none; stroke: #fff; stroke-width: 2.4; stroke-linejoin: round; opacity: .9; }
+    .photo svg.ov .mline { stroke-width: 2.4; stroke-linecap: round; }
+    .photo svg.ov .mdot { stroke: #fff; stroke-width: 1.5; }
+    .photo svg.ov text { font-size: 13px; font-weight: 700; fill: #fff; paint-order: stroke; stroke: rgba(0,0,0,.55); stroke-width: 3px; }
+    .photo .toggle { position: absolute; right: 10px; bottom: 10px; background: rgba(0,0,0,.55); color: #fff; padding: 7px 12px; border-radius: 999px; font-size: .8rem; font-weight: 600; }
+    .verdict { display: flex; gap: 16px; align-items: center; }
+    .verdict .shape-ico { width: 74px; height: 89px; flex: none; }
+    .verdict h2 { font-size: 1.7rem; letter-spacing: -.02em; line-height: 1.1; }
+    .verdict .pct { font-weight: 700; color: var(--accent); }
+    .bars { display: grid; gap: 9px; }
+    .barrow { display: grid; grid-template-columns: 78px 1fr 40px; align-items: center; gap: 10px; font-size: .9rem; text-align: left; width: 100%; }
+    .barrow .track { height: 10px; background: var(--surface-2); border-radius: 99px; overflow: hidden; }
+    .barrow .fill { height: 100%; border-radius: 99px; background: var(--faint); transition: width .6s ease; }
+    .barrow.top .fill { background: linear-gradient(90deg, var(--accent), var(--accent-2)); }
+    .barrow.top { font-weight: 700; }
+    .barrow span:last-child { text-align: right; color: var(--muted); font-variant-numeric: tabular-nums; }
+    .metrics { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+    .metric { background: var(--surface-2); border-radius: 14px; padding: 12px; }
+    .metric .k { font-size: .78rem; color: var(--muted); display: flex; align-items: center; gap: 6px; }
+    .metric .k i { width: 10px; height: 10px; border-radius: 50%; display: inline-block; }
+    .metric .v { font-size: 1.25rem; font-weight: 700; font-variant-numeric: tabular-nums; }
+    .reasons { list-style: none; display: grid; gap: 6px; margin-top: 12px; font-size: .92rem; }
+    .reasons li { padding-left: 16px; position: relative; }
+    .reasons li::before { content: ''; position: absolute; left: 0; top: .6em; width: 6px; height: 6px; border-radius: 50%; background: var(--accent); }
+    .goal { background: var(--accent-soft); border-radius: 14px; padding: 12px 14px; font-size: .92rem; margin-bottom: 14px; }
+    .goal b { color: var(--accent); }
+    .seg { display: flex; background: var(--surface-2); border-radius: 999px; padding: 4px; margin-bottom: 14px; }
+    .seg button { flex: 1; padding: 9px 6px; border-radius: 999px; font-weight: 600; font-size: .88rem; color: var(--muted); }
+    .seg button.on { background: var(--surface); color: var(--text); box-shadow: var(--shadow); }
+    .do-dont { display: grid; gap: 10px; }
+    .do-dont > div { border-radius: 14px; padding: 12px 14px; }
+    .do-dont .do { background: var(--good-soft); }
+    .do-dont .dont { background: var(--bad-soft); }
+    .do-dont b { display: flex; align-items: center; gap: 6px; font-size: .82rem; text-transform: uppercase; letter-spacing: .05em; margin-bottom: 6px; }
+    .do-dont .do b { color: var(--good); }
+    .do-dont .dont b { color: var(--bad); }
+    .do-dont b svg { width: 16px; height: 16px; }
+    .do-dont ul { list-style: none; display: grid; gap: 4px; font-size: .92rem; }
+    .kv { display: grid; gap: 10px; font-size: .92rem; }
+    .kv b { display: block; font-size: .78rem; color: var(--muted); text-transform: uppercase; letter-spacing: .05em; }
+    .warn-card { border-color: var(--accent); }
+    .warn-card p { font-size: .9rem; margin-bottom: 8px; }
+    .note { font-size: .8rem; color: var(--faint); text-align: center; margin: 8px 8px 0; }
+    .empty { text-align: center; padding: 48px 16px; }
+    .empty svg { width: 64px; height: 77px; margin: 0 auto 14px; color: var(--faint); }
+    .empty p { margin-bottom: 18px; }
+
+    /* Shapes library */
+    .grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 12px; }
+    .tile { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 16px 12px 14px; text-align: center; position: relative; box-shadow: var(--shadow); }
+    .tile svg { width: 58px; height: 70px; margin: 0 auto 8px; }
+    .tile b { display: block; }
+    .tile span { font-size: .8rem; color: var(--muted); }
+    .tile .badge { position: absolute; top: 10px; right: 10px; background: var(--accent); color: #fff; font-size: .68rem; font-weight: 700; padding: 3px 8px; border-radius: 99px; }
+    .shape-svg .fillp { fill: var(--accent-soft); stroke: var(--accent); stroke-width: 3; stroke-linejoin: round; }
+    .shape-svg .faintp { fill: none; stroke: currentColor; stroke-width: 4; stroke-linejoin: round; opacity: .55; }
+
+    /* Overlays */
+    .overlay { position: fixed; inset: 0; z-index: 20; }
+    #busy { background: rgba(15, 12, 10, .92); color: #fff; display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; padding: 24px; gap: 10px; }
+    #busy h2 { font-size: 1.3rem; }
+    #busy p { color: rgba(255,255,255,.75); max-width: 300px; margin-bottom: 6px; }
+    #busy .btn.ghost { background: rgba(255,255,255,.14); }
+    .busy-photo { position: relative; width: 220px; aspect-ratio: 4 / 5; border-radius: 22px; overflow: hidden; margin-bottom: 12px; background: #000; }
+    .busy-photo img, .busy-photo svg { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
+    .busy-photo circle { fill: #fff; }
+    .scanline { position: absolute; left: 0; right: 0; height: 3px; background: var(--accent-2); box-shadow: 0 0 18px 6px rgba(240, 138, 93, .55); animation: scan 1.6s ease-in-out infinite alternate; }
+    @keyframes scan { from { top: 4%; } to { top: 94%; } }
+
+    #camera { background: #000; color: #fff; display: flex; flex-direction: column; }
+    #camera .stage { position: relative; flex: 1; overflow: hidden; }
+    #camera video { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; transform: scaleX(-1); }
+    #camera .guide { position: absolute; inset: 0; width: 100%; height: 100%; }
+    #camera .guide .mask { fill: rgba(0,0,0,.5); }
+    #camera .guide .ring { fill: none; stroke: rgba(255,255,255,.85); stroke-width: 3; stroke-dasharray: 10 8; transition: stroke .2s; }
+    #camera.ok .guide .ring { stroke: #5cc79c; stroke-dasharray: none; }
+    #camera .hint { position: absolute; left: 0; right: 0; top: calc(20px + var(--safe-t)); text-align: center; }
+    #camera .hint span { display: inline-block; background: rgba(0,0,0,.6); padding: 8px 16px; border-radius: 999px; font-weight: 600; font-size: .92rem; }
+    #camera .close { position: absolute; left: 16px; top: calc(14px + var(--safe-t)); background: rgba(0,0,0,.5); border: 0; color: #fff; }
+    #camera .controls { display: flex; align-items: center; justify-content: space-around; padding: 18px 16px calc(22px + var(--safe-b)); }
+    #camera .shutter { width: 74px; height: 74px; border-radius: 50%; border: 4px solid #fff; display: grid; place-items: center; }
+    #camera .shutter::after { content: ''; width: 58px; height: 58px; border-radius: 50%; background: #fff; transition: transform .1s; }
+    #camera .shutter:active::after { transform: scale(.9); }
+    #camera .side { width: 54px; height: 54px; border-radius: 50%; background: rgba(255,255,255,.14); display: grid; place-items: center; }
+    #camera .side svg { width: 24px; height: 24px; }
+    #camera .flash { position: absolute; inset: 0; background: #fff; opacity: 0; pointer-events: none; }
+    #camera .flash.go { animation: flash .35s ease-out; }
+    @keyframes flash { from { opacity: .9; } to { opacity: 0; } }
+
+    #sheet-wrap { background: rgba(0,0,0,.4); display: flex; align-items: flex-end; justify-content: center; }
+    #sheet { background: var(--bg); width: 100%; max-width: 560px; max-height: 92vh; overflow-y: auto; border-radius: 24px 24px 0 0; padding: 10px 16px calc(24px + var(--safe-b)); animation: up .25s ease-out; }
+    #sheet .grab { width: 40px; height: 5px; border-radius: 99px; background: var(--border); margin: 0 auto 12px; }
+    @keyframes up { from { transform: translateY(40px); opacity: 0; } }
+
+    #onboard { position: fixed; inset: 0; z-index: 30; background: var(--bg); overflow-y: auto; padding: calc(32px + var(--safe-t)) 20px calc(24px + var(--safe-b)); }
+    #onboard .wrap { min-height: 100%; display: flex; flex-direction: column; justify-content: center; gap: 18px; }
+    #onboard h1 { font-size: 2rem; letter-spacing: -.03em; line-height: 1.1; }
+    .choice { display: grid; gap: 10px; }
+    .choice button { text-align: left; padding: 16px 18px; border-radius: 16px; background: var(--surface); border: 2px solid var(--border); font-weight: 600; }
+    .choice button span { display: block; font-weight: 400; font-size: .88rem; color: var(--muted); }
+    .choice button.on { border-color: var(--accent); background: var(--accent-soft); }
+  </style>
+</head>
+<body>
+  <section id="tab-scan" class="tab"></section>
+  <section id="tab-result" class="tab hidden"></section>
+  <section id="tab-shapes" class="tab hidden"></section>
+
+  <nav class="bar" aria-label="Main">
+    <button data-tab="scan" class="on"></button>
+    <button data-tab="result"></button>
+    <button data-tab="shapes"></button>
+  </nav>
+
+  <div id="camera" class="overlay hidden">
+    <div class="stage">
+      <video playsinline muted></video>
+      <svg class="guide" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true">
+        <defs><mask id="hole"><rect width="100" height="100" fill="#fff"/><ellipse cx="50" cy="47" rx="30" ry="30" fill="#000"/></mask></defs>
+        <rect class="mask" width="100" height="100" mask="url(#hole)"/>
+        <ellipse class="ring" cx="50" cy="47" rx="30" ry="30" vector-effect="non-scaling-stroke"/>
+      </svg>
+      <div class="hint"><span>Starting camera…</span></div>
+      <button class="icon-btn close" data-act="cam-close" aria-label="Close camera"></button>
+      <div class="flash"></div>
+    </div>
+    <div class="controls">
+      <button class="side" data-act="upload" aria-label="Choose a photo"></button>
+      <button class="shutter" data-act="shoot" aria-label="Take photo"></button>
+      <span class="side" style="visibility:hidden"></span>
+    </div>
+  </div>
+
+  <div id="busy" class="overlay hidden" aria-live="polite"></div>
+  <div id="sheet-wrap" class="overlay hidden"><div id="sheet" role="dialog" aria-modal="true"></div></div>
+  <div id="onboard" class="hidden"></div>
+
+  <input id="file" type="file" accept="image/*" class="hidden">
+
+  <script src="shape.js"></script>
+  <script src="styles.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>

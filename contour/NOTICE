@@ -1,0 +1,7 @@
+Third-party files used by Contour
+=================================
+
+Contour loads the MediaPipe Tasks Vision library and the Face Landmarker model
+from ../facet/vendor/, the copies bundled with Facet on this same site. Both
+are Copyright Google LLC and licensed under the Apache License, Version 2.0.
+See ../facet/vendor/NOTICE for versions, sources and checksums.
