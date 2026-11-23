@@ -1,0 +1,165 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; media-src 'self' blob: mediastream:; connect-src 'self'; worker-src 'self'; manifest-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="Gleam">
+  <meta name="theme-color" content="#1b1018">
+  <meta name="description" content="Try on makeup, retouch skin and reshape your face on a selfie, all on your device">
+  <link rel="manifest" href="manifest.json">
+  <link rel="apple-touch-icon" href="icon-192.png">
+  <title>Gleam Makeup Studio</title>
+  <style>
+    :root {
+      --bg: #1b1018; --surface: #26182282; --surface-solid: #2a1b26; --surface-2: #3a2834; --border: #4a3442;
+      --text: #fbf2f6; --muted: #c9b2be; --faint: #8c7483;
+      --accent: #ff6fa3; --accent-2: #ffb36b; --accent-soft: rgba(255, 111, 163, .16);
+      --safe-b: env(safe-area-inset-bottom, 0px); --safe-t: env(safe-area-inset-top, 0px);
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
+    html, body { height: 100%; }
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: var(--bg); color: var(--text); overscroll-behavior: none; -webkit-user-select: none; user-select: none; }
+    button { font: inherit; color: inherit; background: none; border: 0; cursor: pointer; }
+    svg { display: block; }
+    .hidden { display: none !important; }
+    .muted { color: var(--muted); }
+    .small { font-size: .88rem; }
+
+    .btn { display: inline-flex; align-items: center; justify-content: center; gap: 8px; padding: 14px 20px; border-radius: 999px; font-weight: 700; }
+    .btn svg { width: 20px; height: 20px; }
+    .btn.primary { background: linear-gradient(135deg, var(--accent), var(--accent-2)); color: #2a0d1a; }
+    .btn.ghost { background: var(--surface-2); }
+    .btn.sm { padding: 9px 14px; font-size: .88rem; }
+
+    /* Home */
+    #home { min-height: 100%; padding: calc(20px + var(--safe-t)) 16px calc(28px + var(--safe-b)); }
+    #home .wrap { max-width: 520px; margin: 0 auto; }
+    .brand { display: flex; align-items: center; gap: 10px; font-weight: 800; font-size: 1.3rem; letter-spacing: -.02em; margin-bottom: 18px; }
+    .brand i { width: 34px; height: 34px; border-radius: 10px; background: linear-gradient(135deg, var(--accent), var(--accent-2)); display: grid; place-items: center; color: #2a0d1a; }
+    .brand i svg { width: 20px; height: 20px; }
+    .hero { border-radius: 26px; padding: 26px 20px 20px; background: radial-gradient(120% 90% at 100% 0%, rgba(255, 179, 107, .35), transparent 60%), radial-gradient(120% 90% at 0% 100%, rgba(255, 111, 163, .35), transparent 60%), var(--surface-solid); border: 1px solid var(--border); margin-bottom: 18px; }
+    .hero h1 { font-size: 1.9rem; letter-spacing: -.03em; line-height: 1.1; margin-bottom: 8px; }
+    .hero p { color: var(--muted); margin-bottom: 18px; }
+    .hero .row { display: flex; gap: 10px; }
+    .hero .row .btn { flex: 1; }
+    .feats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; margin-bottom: 22px; }
+    .feat { background: var(--surface-solid); border: 1px solid var(--border); border-radius: 16px; padding: 12px 4px; text-align: center; font-size: .74rem; font-weight: 600; color: var(--muted); }
+    .feat svg { width: 24px; height: 24px; margin: 0 auto 6px; color: var(--accent); }
+    h2.sec { font-size: 1.05rem; margin-bottom: 10px; }
+    .recent { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+    .recent .item { position: relative; aspect-ratio: 4 / 5; border-radius: 14px; overflow: hidden; background: var(--surface-2); }
+    .recent .item img { width: 100%; height: 100%; object-fit: cover; }
+    .recent .item .del { position: absolute; top: 6px; right: 6px; width: 26px; height: 26px; border-radius: 50%; background: rgba(0,0,0,.55); display: grid; place-items: center; }
+    .recent .item .del svg { width: 14px; height: 14px; }
+    .note { font-size: .78rem; color: var(--faint); text-align: center; margin-top: 18px; }
+
+    /* Editor */
+    #editor { position: fixed; inset: 0; display: flex; flex-direction: column; background: #0d080b; z-index: 10; }
+    #editor header { display: flex; align-items: center; justify-content: space-between; padding: calc(10px + var(--safe-t)) 12px 10px; gap: 8px; }
+    .round { width: 40px; height: 40px; border-radius: 50%; background: rgba(255,255,255,.1); display: grid; place-items: center; }
+    .round svg { width: 20px; height: 20px; }
+    #editor header .right { display: flex; gap: 8px; align-items: center; }
+    .stage { flex: 1; min-height: 0; display: flex; align-items: center; justify-content: center; position: relative; padding: 0 8px; }
+    .stage canvas { max-width: 100%; max-height: 100%; border-radius: 14px; touch-action: none; }
+    .stage .badge { position: absolute; top: 10px; left: 50%; transform: translateX(-50%); background: rgba(0,0,0,.6); padding: 5px 12px; border-radius: 999px; font-size: .78rem; font-weight: 700; pointer-events: none; }
+    .stage .working { position: absolute; bottom: 12px; right: 18px; width: 22px; height: 22px; border-radius: 50%; border: 3px solid rgba(255,255,255,.25); border-top-color: #fff; animation: spin .8s linear infinite; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    #panel { padding: 12px 0 4px; min-height: 132px; }
+    #cats { display: flex; overflow-x: auto; gap: 4px; padding: 6px 10px calc(10px + var(--safe-b)); border-top: 1px solid rgba(255,255,255,.08); scrollbar-width: none; }
+    #cats::-webkit-scrollbar, .hscroll::-webkit-scrollbar { display: none; }
+    #cats button { flex: none; min-width: 64px; padding: 6px 4px; display: flex; flex-direction: column; align-items: center; gap: 4px; font-size: .72rem; font-weight: 600; color: var(--faint); border-radius: 12px; }
+    #cats button svg { width: 24px; height: 24px; }
+    #cats button.on { color: var(--text); background: rgba(255,255,255,.08); }
+    #cats button.on svg { color: var(--accent); }
+
+    .hscroll { display: flex; gap: 10px; overflow-x: auto; padding: 2px 14px 8px; scrollbar-width: none; }
+    .sw { flex: none; width: 38px; height: 38px; border-radius: 50%; border: 2px solid transparent; outline: 2px solid transparent; outline-offset: 2px; position: relative; }
+    .sw.on { outline-color: #fff; }
+    .sw.none { background: rgba(255,255,255,.1); display: grid; place-items: center; color: var(--muted); }
+    .sw.none svg { width: 20px; height: 20px; }
+    .chips { display: flex; gap: 8px; overflow-x: auto; padding: 0 14px 8px; scrollbar-width: none; }
+    .chip { flex: none; padding: 7px 14px; border-radius: 999px; background: rgba(255,255,255,.08); font-size: .84rem; font-weight: 600; color: var(--muted); }
+    .chip.on { background: var(--text); color: #1b1018; }
+    .look { flex: none; width: 70px; text-align: center; font-size: .74rem; font-weight: 600; color: var(--muted); }
+    .look .dot { width: 58px; height: 58px; margin: 0 auto 5px; border-radius: 18px; border: 2px solid transparent; position: relative; overflow: hidden; }
+    .look .dot span { position: absolute; }
+    .look.on { color: var(--text); }
+    .look.on .dot { border-color: #fff; }
+    .slider { display: grid; grid-template-columns: 92px 1fr 36px; align-items: center; gap: 10px; padding: 4px 16px; font-size: .84rem; color: var(--muted); }
+    .slider output { text-align: right; font-variant-numeric: tabular-nums; color: var(--text); }
+    input[type=range] { -webkit-appearance: none; appearance: none; width: 100%; height: 28px; background: transparent; }
+    input[type=range]::-webkit-slider-runnable-track { height: 4px; border-radius: 4px; background: linear-gradient(90deg, var(--accent) var(--fill, 0%), rgba(255,255,255,.18) var(--fill, 0%)); }
+    input[type=range]::-webkit-slider-thumb { -webkit-appearance: none; width: 22px; height: 22px; border-radius: 50%; background: #fff; margin-top: -9px; box-shadow: 0 1px 4px rgba(0,0,0,.4); }
+    input[type=range]::-moz-range-track { height: 4px; border-radius: 4px; background: rgba(255,255,255,.18); }
+    input[type=range]::-moz-range-progress { height: 4px; border-radius: 4px; background: var(--accent); }
+    input[type=range]::-moz-range-thumb { width: 22px; height: 22px; border-radius: 50%; background: #fff; border: 0; }
+    .panel-head { display: flex; justify-content: space-between; align-items: center; padding: 0 16px 8px; font-size: .8rem; color: var(--faint); }
+    .panel-head button { color: var(--muted); font-weight: 600; font-size: .8rem; }
+
+    /* Overlays */
+    .overlay { position: fixed; inset: 0; z-index: 30; }
+    #busy { background: rgba(13, 8, 11, .92); display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; padding: 24px; gap: 10px; }
+    #busy h2 { font-size: 1.25rem; }
+    #busy p { color: var(--muted); max-width: 300px; margin-bottom: 6px; }
+    #busy .spin { width: 42px; height: 42px; border-radius: 50%; border: 4px solid rgba(255,255,255,.2); border-top-color: var(--accent); animation: spin .8s linear infinite; margin-bottom: 8px; }
+    #busy .row { display: flex; gap: 10px; }
+    #camera { background: #000; display: flex; flex-direction: column; }
+    #camera .view { position: relative; flex: 1; overflow: hidden; }
+    #camera video { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; transform: scaleX(-1); }
+    #camera .close { position: absolute; left: 14px; top: calc(14px + var(--safe-t)); background: rgba(0,0,0,.5); }
+    #camera .flash { position: absolute; inset: 0; background: #fff; opacity: 0; pointer-events: none; }
+    #camera .flash.go { animation: flash .35s ease-out; }
+    @keyframes flash { from { opacity: .9; } to { opacity: 0; } }
+    #camera .controls { display: flex; align-items: center; justify-content: space-around; padding: 18px 16px calc(22px + var(--safe-b)); }
+    #camera .shutter { width: 74px; height: 74px; border-radius: 50%; border: 4px solid #fff; display: grid; place-items: center; }
+    #camera .shutter::after { content: ''; width: 58px; height: 58px; border-radius: 50%; background: linear-gradient(135deg, var(--accent), var(--accent-2)); }
+    #camera .side { width: 52px; height: 52px; border-radius: 50%; background: rgba(255,255,255,.14); display: grid; place-items: center; }
+    #camera .side svg { width: 24px; height: 24px; }
+  </style>
+</head>
+<body>
+  <main id="home"></main>
+
+  <section id="editor" class="hidden">
+    <header>
+      <button class="round" data-act="close-editor" aria-label="Back"></button>
+      <div class="right">
+        <button class="round" data-act="reset-all" aria-label="Reset all edits"></button>
+        <button class="round" id="compare" aria-label="Hold to see the original"></button>
+        <button class="btn primary sm" data-act="save"></button>
+      </div>
+    </header>
+    <div class="stage">
+      <canvas id="view" aria-label="Your edited photo"></canvas>
+      <div class="badge hidden" id="before">Original</div>
+      <div class="working hidden" id="working"></div>
+    </div>
+    <div id="panel"></div>
+    <nav id="cats" aria-label="Tools"></nav>
+  </section>
+
+  <div id="camera" class="overlay hidden">
+    <div class="view">
+      <video playsinline muted></video>
+      <button class="round close" data-act="cam-close" aria-label="Close camera"></button>
+      <div class="flash"></div>
+    </div>
+    <div class="controls">
+      <button class="side" data-act="upload" aria-label="Choose a photo"></button>
+      <button class="shutter" data-act="shoot" aria-label="Take photo"></button>
+      <span class="side" style="visibility:hidden"></span>
+    </div>
+  </div>
+
+  <div id="busy" class="overlay hidden" aria-live="polite"></div>
+  <input id="file" type="file" accept="image/*" class="hidden">
+
+  <script src="engine.js"></script>
+  <script src="looks.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
