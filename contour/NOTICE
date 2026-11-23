@@ -5,3 +5,9 @@ Contour loads the MediaPipe Tasks Vision library and the Face Landmarker model
 from ../facet/vendor/, the copies bundled with Facet on this same site. Both
 are Copyright Google LLC and licensed under the Apache License, Version 2.0.
 See ../facet/vendor/NOTICE for versions, sources and checksums.
+
+vendor/hair_segmenter.tflite  MediaPipe Hair Segmenter model (float32, version 1), unmodified,
+            from https://storage.googleapis.com/mediapipe-models/image_segmenter/hair_segmenter/float32/1/hair_segmenter.tflite
+            SHA-256 2628cf3ce5f695f604cbea2841e00befcaa3624bf80caf3664bef2656d59bf84
+            Copyright Google LLC. Licensed under the Apache License, Version 2.0.
+            Served from this site so no third-party code or requests are involved.

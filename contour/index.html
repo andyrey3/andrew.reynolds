@@ -150,6 +150,61 @@
     .shape-svg .fillp { fill: var(--accent-soft); stroke: var(--accent); stroke-width: 3; stroke-linejoin: round; }
     .shape-svg .faintp { fill: none; stroke: currentColor; stroke-width: 4; stroke-linejoin: round; opacity: .55; }
 
+    /* Hairstyles */
+    .prefs .pref { margin-bottom: 12px; }
+    .prefs .pref:last-child { margin-bottom: 0; }
+    .prefs .lab { font-size: .76rem; font-weight: 700; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); margin-bottom: 6px; }
+    .prefs .lab span { text-transform: none; letter-spacing: 0; font-weight: 500; }
+    .chips { display: flex; flex-wrap: wrap; gap: 6px; }
+    .chip { padding: 7px 12px; border-radius: 999px; background: var(--surface-2); font-size: .85rem; font-weight: 600; color: var(--muted); }
+    .chip.on { background: var(--accent); color: #fff; }
+    .hsec { font-size: 1.05rem; margin: 18px 0 10px; }
+    .hgrid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 12px; }
+    .hcard { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 10px 10px 12px; text-align: left; box-shadow: var(--shadow); display: flex; flex-direction: column; gap: 4px; }
+    .hcard .art { aspect-ratio: 200 / 304; background: var(--surface-2); border-radius: 12px; overflow: hidden; margin-bottom: 4px; }
+    .hair-art { width: 100%; height: 100%; }
+    .hair-art .hair-skin { fill: #e8c4a6; }
+    .hair-art .hair-body { fill: #cdbfb2; }
+    .hair-art .hair-face path { fill: none; stroke: #9c7560; stroke-width: 2.2; stroke-linecap: round; }
+    @media (prefers-color-scheme: dark) { .hair-art .hair-body { fill: #4a3f37; } }
+    .hero-art { width: 62%; max-width: 260px; margin: 0 auto 12px; aspect-ratio: 200 / 304; background: var(--surface-2); border-radius: var(--radius); overflow: hidden; }
+    .tag { align-self: flex-start; display: inline-block; font-size: .72rem; font-weight: 700; padding: 3px 9px; border-radius: 999px; }
+    .tag.great { background: var(--good-soft); color: var(--good); }
+    .tag.good { background: var(--accent-soft); color: var(--accent); }
+    .tag.can { background: var(--surface-2); color: var(--muted); }
+    .tag.no { background: var(--bad-soft); color: var(--bad); }
+    .hscroll { display: flex; gap: 10px; overflow-x: auto; padding: 4px 4px 12px; justify-content: center; }
+    .sw { flex: none; width: 34px; height: 34px; border-radius: 50%; outline: 2px solid transparent; outline-offset: 2px; border: 2px solid rgba(255,255,255,.4); }
+    .sw.on { outline-color: var(--accent); }
+
+    /* Live try-on */
+    .try-cta { margin-bottom: 14px; }
+    #tryon { background: #000; color: #fff; display: flex; flex-direction: column; z-index: 25; }
+    #tryon .stage { position: relative; flex: 1; overflow: hidden; }
+    #tryon video { position: absolute; width: 1px; height: 1px; opacity: 0; pointer-events: none; }
+    #tryon canvas.view { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; transform: scaleX(-1); }
+    #tryon .topbar { position: absolute; left: 0; right: 0; top: 0; display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: calc(12px + var(--safe-t)) 14px 12px; background: linear-gradient(rgba(0,0,0,.5), transparent); }
+    #tryon .topbar .icon-btn { background: rgba(0,0,0,.45); border: 0; color: #fff; }
+    #tryon .name { text-align: center; font-size: .95rem; display: flex; flex-direction: column; align-items: center; gap: 4px; }
+    #tryon .name .tag { align-self: center; }
+    #tryon .hint { position: absolute; left: 0; right: 0; bottom: 18px; text-align: center; }
+    #tryon .hint span { background: rgba(0,0,0,.6); padding: 8px 16px; border-radius: 999px; font-weight: 600; font-size: .9rem; }
+    #tryon .status { position: absolute; left: 24px; right: 24px; top: 45%; text-align: center; background: rgba(0,0,0,.65); padding: 14px; border-radius: 14px; font-weight: 600; }
+    #tryon .flash { position: absolute; inset: 0; background: #fff; opacity: 0; pointer-events: none; }
+    #tryon .flash.go { animation: flash .35s ease-out; }
+    #tryon .controls { background: #111; padding: 10px 0 calc(12px + var(--safe-b)); }
+    #tryon .styles { display: flex; gap: 8px; overflow-x: auto; padding: 0 12px 10px; scrollbar-width: none; }
+    #tryon .styles::-webkit-scrollbar, #tryon .colors::-webkit-scrollbar { display: none; }
+    .tstyle { flex: none; width: 74px; display: flex; flex-direction: column; align-items: center; gap: 4px; font-size: .7rem; font-weight: 600; color: #bbb; text-align: center; line-height: 1.2; }
+    .tstyle .thumb { width: 62px; height: 78px; border-radius: 12px; overflow: hidden; background: #2a2622; border: 2px solid transparent; }
+    .tstyle .thumb svg { width: 100%; height: 100%; }
+    .tstyle.on { color: #fff; }
+    .tstyle.on .thumb { border-color: var(--accent); }
+    #tryon .colors { display: flex; gap: 10px; align-items: center; overflow-x: auto; padding: 0 12px; scrollbar-width: none; }
+    #tryon .colors .chip { flex: none; background: #2a2622; color: #ddd; }
+    #tryon .colors .chip.on { background: var(--accent); color: #fff; }
+    #tryon .hair-art .hair-body { fill: #4a3f37; }
+
     /* Overlays */
     .overlay { position: fixed; inset: 0; z-index: 20; }
     #busy { background: rgba(15, 12, 10, .92); color: #fff; display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; padding: 24px; gap: 10px; }
@@ -199,11 +254,13 @@
 <body>
   <section id="tab-scan" class="tab"></section>
   <section id="tab-result" class="tab hidden"></section>
+  <section id="tab-hair" class="tab hidden"></section>
   <section id="tab-shapes" class="tab hidden"></section>
 
   <nav class="bar" aria-label="Main">
     <button data-tab="scan" class="on"></button>
     <button data-tab="result"></button>
+    <button data-tab="hair"></button>
     <button data-tab="shapes"></button>
   </nav>
 
@@ -226,6 +283,25 @@
     </div>
   </div>
 
+  <div id="tryon" class="overlay hidden">
+    <div class="stage">
+      <video playsinline muted></video>
+      <canvas class="view" aria-label="Live haircut preview"></canvas>
+      <div class="topbar">
+        <button class="icon-btn close" data-act="try-close" aria-label="Close try-on"></button>
+        <div class="name"></div>
+        <button class="icon-btn snap" data-act="try-snap" aria-label="Save a photo"></button>
+      </div>
+      <div class="hint hidden"><span>Look at the camera</span></div>
+      <div class="status hidden"></div>
+      <div class="flash"></div>
+    </div>
+    <div class="controls">
+      <div class="styles"></div>
+      <div class="colors"></div>
+    </div>
+  </div>
+
   <div id="busy" class="overlay hidden" aria-live="polite"></div>
   <div id="sheet-wrap" class="overlay hidden"><div id="sheet" role="dialog" aria-modal="true"></div></div>
   <div id="onboard" class="hidden"></div>
@@ -234,6 +310,8 @@
 
   <script src="shape.js"></script>
   <script src="styles.js"></script>
+  <script src="hair.js"></script>
   <script src="app.js"></script>
+  <script src="tryon.js"></script>
 </body>
 </html>

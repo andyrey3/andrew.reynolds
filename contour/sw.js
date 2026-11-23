@@ -1,10 +1,10 @@
 // Caches the app shell and the face model so scans work offline after the
 // first one. Scans live in localStorage and are never touched here.
-const CACHE = 'contour-v1';
-const ASSETS = ['./', './index.html', './manifest.json', './icon-192.png', './icon-512.png', './shape.js', './styles.js', './app.js'];
+const CACHE = 'contour-v3';
+const ASSETS = ['./', './index.html', './manifest.json', './icon-192.png', './icon-512.png', './shape.js', './styles.js', './hair.js', './app.js', './tryon.js'];
 // The MediaPipe library and model are shared with Facet and only change
 // with a new folder name, so they're cached for good once fetched
-const PINNED = [new URL('../facet/vendor/', self.registration.scope).href];
+const PINNED = [new URL('../facet/vendor/', self.registration.scope).href, new URL('vendor/', self.registration.scope).href];
 
 self.addEventListener('install', e => {
   e.waitUntil(
