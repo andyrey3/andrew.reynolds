@@ -2,8 +2,12 @@
 // MediaPipe's face landmarker; scans are kept in localStorage and nothing
 // is uploaded.
 
+const TABS = ['scan', 'result', 'hair', 'shapes'];
+const HAIR_COLORS = [['#1c1512', 'Black'], ['#3b2619', 'Dark brown'], ['#6b4528', 'Brown'], ['#a8783f', 'Light brown'], ['#d2ad6b', 'Blonde'], ['#8e3b1f', 'Red'], ['#9b958f', 'Grey']];
+
 const KEY = 'contour-v1';
-const DEFAULTS = { onboarded: false, style: 'all', scans: [], current: null, tab: 'scan', guide: 'hair', lines: true };
+const DEFAULTS = { onboarded: false, style: 'all', scans: [], current: null, tab: 'scan', guide: 'hair', lines: true,
+  hair: { shape: null, who: null, type: null, length: 'any' }, hairColor: '#3b2619', hairView: 'art' };
 let S = load();
 
 function load() {
@@ -15,6 +19,9 @@ function load() {
   if (!Array.isArray(fresh.scans)) fresh.scans = [];
   fresh.scans = fresh.scans.filter(validScan);
   if (!['m', 'f', 'all'].includes(fresh.style)) fresh.style = 'all';
+  if (!fresh.hair || typeof fresh.hair !== 'object') fresh.hair = { ...DEFAULTS.hair };
+  if (fresh.hair.shape && !SHAPES[fresh.hair.shape]) fresh.hair.shape = null;
+  if (!HAIR_COLORS.some(c => c[0] === fresh.hairColor)) fresh.hairColor = DEFAULTS.hairColor;
   return fresh;
 }
 function validScan(s) {
@@ -73,7 +80,7 @@ function shapeSvg(id, cls = 'fillp') {
 
 function showTab(t) {
   S.tab = t;
-  for (const id of ['scan', 'result', 'shapes']) $(`#tab-${id}`).classList.toggle('hidden', id !== t);
+  for (const id of TABS) $(`#tab-${id}`).classList.toggle('hidden', id !== t);
   document.querySelectorAll('nav.bar button').forEach(b => b.classList.toggle('on', b.dataset.tab === t));
   render();
   save();
@@ -82,11 +89,12 @@ function showTab(t) {
 function render() {
   if (S.tab === 'scan') renderScan();
   else if (S.tab === 'result') renderResult();
+  else if (S.tab === 'hair') renderHair();
   else renderShapes();
 }
 
 function renderNav() {
-  const labels = { scan: [ICON.scan, 'Scan'], result: [ICON.face, 'My shape'], shapes: [ICON.grid, 'Shapes'] };
+  const labels = { scan: [ICON.scan, 'Scan'], result: [ICON.face, 'My shape'], hair: [ICON.scissors, 'Hairstyles'], shapes: [ICON.grid, 'Shapes'] };
   document.querySelectorAll('nav.bar button').forEach(b => {
     const [ico, name] = labels[b.dataset.tab];
     b.innerHTML = `${ico}<span>${name}</span>`;
@@ -231,7 +239,8 @@ function renderResult() {
       <ul class="reasons">${r.reasons.map(x => `<li>${esc(x)}</li>`).join('')}</ul>
     </div>
 
-    <div class="card"><h3>${ICON.scissors}Your style guide</h3>${guideHtml(r.shape)}</div>
+    <div class="card"><h3>${ICON.scissors}Your style guide</h3>${guideHtml(r.shape)}
+      <button class="btn primary block" data-act="go-hair" style="margin-top:14px">${ICON.scissors}See hairstyles for you</button></div>
 
     <div class="row-btns">
       <button class="btn ghost sm" data-act="share">${ICON.share}Share</button>
@@ -257,6 +266,108 @@ function renderShapes() {
   </div>`;
 }
 
+// ---------- Hairstyles ----------
+
+let sheetHair = null;
+
+function hairPrefs() {
+  const scan = currentScan();
+  return {
+    shape: S.hair.shape || (scan && scan.result.shape) || null,
+    fromScan: !S.hair.shape && !!scan,
+    who: S.hair.who || S.style,
+    type: S.hair.type,
+    length: S.hair.length || 'any'
+  };
+}
+
+function chipRow(label, key, opts, cur) {
+  return `<div class="pref"><div class="lab">${label}</div><div class="chips">${opts.map(([v, n]) =>
+    `<button class="chip ${cur === v ? 'on' : ''}" data-act="hpref" data-k="${key}" data-v="${v}">${n}</button>`).join('')}</div></div>`;
+}
+
+const FIT_CLASS = { 2: 'great', 1: 'good', 0: 'can', '-1': 'no' };
+const EFFORT = { 1: 'Low effort', 2: 'Some styling', 3: 'Daily styling' };
+const LEN = { short: 'Short', medium: 'Medium', long: 'Long' };
+
+function renderHair() {
+  const pr = hairPrefs();
+  const prefs = `<div class="card prefs">
+    ${chipRow(`Face shape${pr.fromScan ? ' <span class="muted">· from your scan</span>' : ''}`, 'shape', SHAPE_ORDER.map(id => [id, SHAPES[id].name]), pr.shape)}
+    ${chipRow('Styles for', 'who', [['m', 'Men'], ['f', 'Women'], ['all', 'Everyone']], pr.who)}
+    ${chipRow('Your hair', 'type', [['straight', 'Straight'], ['wavy', 'Wavy'], ['curly', 'Curly'], ['coily', 'Coily']], pr.type)}
+    ${chipRow('Length you want', 'length', [['any', 'Any'], ['short', 'Short'], ['medium', 'Medium'], ['long', 'Long']], pr.length)}
+  </div>`;
+  let body;
+  if (!pr.shape) {
+    body = `<div class="card" style="text-align:center"><p class="muted" style="margin-bottom:14px">Scan your face, or pick your face shape above, to see which hairstyles suit you.</p>
+      <div class="row-btns"><button class="btn primary" data-act="camera">${ICON.camera}Scan my face</button></div></div>`;
+  } else {
+    const list = HS.rank(pr.shape, pr);
+    const best = list.filter(x => x.fit >= 1 && x.texOk && x.lenOk);
+    const rest = list.filter(x => !best.includes(x));
+    const card = x => `<button class="hcard" data-act="hstyle" data-id="${x.s.id}">
+      <div class="art">${HS.headSvg(x.s.id, S.hairColor)}</div>
+      <b>${esc(x.s.name)}</b>
+      <span class="tag ${FIT_CLASS[x.fit]}">${x.label}</span>
+      <span class="muted small">${LEN[x.s.len]} · ${EFFORT[x.s.maint]}</span>
+    </button>`;
+    body = `${best.length ? `<h2 class="hsec">Best for your ${esc(SHAPES[pr.shape].name.toLowerCase())} face</h2><div class="hgrid">${best.map(card).join('')}</div>`
+      : `<div class="card"><p class="small muted">No top matches with these filters. Try “Any” length or a different hair type.</p></div>`}
+      ${rest.length ? `<h2 class="hsec">More styles</h2><div class="hgrid">${rest.map(card).join('')}</div>` : ''}`;
+  }
+  $('#tab-hair').innerHTML = `<div class="wrap">
+    <header class="top"><div><div class="eyebrow">Hairstyles</div><h1>Find your cut</h1></div></header>
+    ${prefs}${body}
+    <p class="note">Matches use face shape, hair type and the length you want. A good stylist can adapt any of these to your hair.</p>
+  </div>`;
+}
+
+function hairOnPhoto(scan, id, color) {
+  const at = i => { const k = CS.KEEP.indexOf(i); return { x: scan.pts[k * 2], y: scan.pts[k * 2 + 1] }; };
+  const t = HS.photoTransform(at(CS.P.top), at(CS.P.cheekA), at(CS.P.cheekB), at(CS.P.chin));
+  const L = HS.layers(id);
+  const face = CS.OUTLINE.map((i, n) => { const p = at(i); return `${n ? 'L' : 'M'}${p.x} ${p.y}`; }).join(' ') + 'Z';
+  const m = `matrix(${t.sx.toFixed(4)} 0 0 ${t.sy.toFixed(4)} ${t.tx.toFixed(2)} ${t.ty.toFixed(2)})`;
+  const g = paths => `<g transform="${m}" fill="${color}">${paths.map(p => `<path d="${p}"/>`).join('')}</g>`;
+  return `<svg class="ov" viewBox="0 0 ${scan.w} ${scan.h}" aria-hidden="true">
+    <defs>
+      <mask id="hcut" maskUnits="userSpaceOnUse" x="0" y="0" width="${scan.w}" height="${scan.h}"><rect width="${scan.w}" height="${scan.h}" fill="#fff"/><path d="${face}" fill="#000"/></mask>
+      <filter id="hsoft" x="-10%" y="-10%" width="120%" height="120%"><feGaussianBlur stdDeviation="1.4"/></filter>
+    </defs>
+    <g mask="url(#hcut)" opacity=".88" filter="url(#hsoft)">${g(L.back)}</g>
+    ${L.front.length ? `<g opacity=".88" filter="url(#hsoft)">${g(L.front)}</g>` : ''}
+  </svg>`;
+}
+
+function hairSheet(id) {
+  sheetHair = id;
+  const pr = hairPrefs(), s = HS.STYLES.find(x => x.id === id);
+  const r = pr.shape ? HS.rank(pr.shape, { ...pr, who: 'all' }).find(x => x.s.id === id) : null;
+  const scan = currentScan();
+  const view = scan && S.hairView === 'photo' ? 'photo' : 'art';
+  const pro = s.who === 'm' ? 'barber' : 'stylist';
+  const shapeName = pr.shape ? SHAPES[pr.shape].name.toLowerCase() : '';
+  openSheet(`
+    ${scan ? `<div class="seg">${[['art', 'Illustration'], ['photo', 'On my photo']].map(([k, n]) => `<button class="${view === k ? 'on' : ''}" data-act="hview" data-v="${k}">${n}</button>`).join('')}</div>` : ''}
+    ${view === 'photo'
+      ? `<div class="photo"><img src="${scan.img}" alt="Your photo with the hairstyle drawn on">${hairOnPhoto(scan, id, S.hairColor)}</div>
+         <p class="note" style="margin:-6px 0 12px">Rough preview of the shape. Your own hair still shows underneath.</p>`
+      : `<div class="hero-art">${HS.headSvg(id, S.hairColor)}</div>`}
+    <div class="hscroll">${HAIR_COLORS.map(([c, n]) => `<button class="sw ${S.hairColor === c ? 'on' : ''}" style="background:${c}" data-act="hcolor" data-v="${c}" aria-label="${n}" title="${n}"></button>`).join('')}</div>
+    <div class="card">
+      <h2 style="margin-bottom:6px">${esc(s.name)}</h2>
+      ${r ? `<span class="tag ${FIT_CLASS[r.fit]}">${r.label} for a ${esc(shapeName)} face</span>` : ''}
+      <p class="small" style="margin-top:10px">${esc(s.why)}</p>
+      ${r && r.fit <= 0 ? `<p class="small muted" style="margin-top:8px">For a ${esc(shapeName)} face, the usual goal is: ${esc(SHAPES[pr.shape].goal)}</p>` : ''}
+      ${r && !r.texOk ? `<p class="small muted" style="margin-top:8px">Easiest with ${esc(s.tex.join(', '))} hair. With yours it may take more styling.</p>` : ''}
+    </div>
+    <div class="card"><h3>${ICON.scissors}Ask your ${pro} for</h3><p class="small">${esc(s.ask)}</p></div>
+    <div class="card"><h3>${ICON.check}Styling it</h3><p class="small">${esc(s.tip)}</p>
+      <p class="small muted" style="margin-top:8px">${LEN[s.len]} · ${EFFORT[s.maint]} · Works with ${esc(s.tex.join(', '))} hair</p></div>
+    <button class="btn ghost block" data-act="close-sheet">Close</button>`);
+}
+
 // ---------- Sheets ----------
 
 let sheetShape = null;
@@ -265,7 +376,7 @@ function openSheet(html) {
   $('#sheet-wrap').classList.remove('hidden');
   $('#sheet').scrollTop = 0;
 }
-function closeSheet() { $('#sheet-wrap').classList.add('hidden'); sheetShape = null; }
+function closeSheet() { $('#sheet-wrap').classList.add('hidden'); sheetShape = null; sheetHair = null; }
 
 function shapeSheet(id) {
   sheetShape = id;
@@ -556,6 +667,20 @@ document.addEventListener('click', async e => {
     if (!confirm('Delete all your scans? This can’t be undone.')) return;
     S.scans = []; S.current = null; save(); closeSheet(); render();
   }
+  else if (act === 'go-hair') showTab('hair');
+  else if (act === 'hpref') {
+    const k = el.dataset.k, v = el.dataset.v;
+    S.hair[k] = (k === 'type' && S.hair.type === v) ? null : v;
+    save();
+    const tab = $('#tab-hair'), top = tab.scrollTop; renderHair(); tab.scrollTop = top;
+  }
+  else if (act === 'hstyle') hairSheet(el.dataset.id);
+  else if (act === 'hcolor' || act === 'hview') {
+    if (act === 'hcolor') S.hairColor = el.dataset.v; else S.hairView = el.dataset.v;
+    save();
+    const top = $('#sheet').scrollTop; hairSheet(sheetHair); $('#sheet').scrollTop = top;
+    if (act === 'hcolor') { const tab = $('#tab-hair'), t2 = tab.scrollTop; renderHair(); tab.scrollTop = t2; }
+  }
   else if (act === 'share') {
     const scan = currentScan(); if (!scan) return;
     const text = `My face shape is ${SHAPES[scan.result.shape].name} (${scan.result.matches[0].pct}% match), found with Contour.`;
@@ -586,7 +711,7 @@ document.addEventListener('visibilitychange', () => { if (document.hidden && str
 $('#camera .close').innerHTML = ICON.x;
 $('#camera .controls .side').innerHTML = ICON.image;
 renderNav();
-showTab(['scan', 'result', 'shapes'].includes(S.tab) ? S.tab : 'scan');
+showTab(TABS.includes(S.tab) ? S.tab : 'scan');
 if (!S.onboarded) renderOnboard();
 
 if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});

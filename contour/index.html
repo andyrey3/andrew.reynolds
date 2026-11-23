@@ -150,6 +150,33 @@
     .shape-svg .fillp { fill: var(--accent-soft); stroke: var(--accent); stroke-width: 3; stroke-linejoin: round; }
     .shape-svg .faintp { fill: none; stroke: currentColor; stroke-width: 4; stroke-linejoin: round; opacity: .55; }
 
+    /* Hairstyles */
+    .prefs .pref { margin-bottom: 12px; }
+    .prefs .pref:last-child { margin-bottom: 0; }
+    .prefs .lab { font-size: .76rem; font-weight: 700; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); margin-bottom: 6px; }
+    .prefs .lab span { text-transform: none; letter-spacing: 0; font-weight: 500; }
+    .chips { display: flex; flex-wrap: wrap; gap: 6px; }
+    .chip { padding: 7px 12px; border-radius: 999px; background: var(--surface-2); font-size: .85rem; font-weight: 600; color: var(--muted); }
+    .chip.on { background: var(--accent); color: #fff; }
+    .hsec { font-size: 1.05rem; margin: 18px 0 10px; }
+    .hgrid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 12px; }
+    .hcard { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 10px 10px 12px; text-align: left; box-shadow: var(--shadow); display: flex; flex-direction: column; gap: 4px; }
+    .hcard .art { aspect-ratio: 200 / 304; background: var(--surface-2); border-radius: 12px; overflow: hidden; margin-bottom: 4px; }
+    .hair-art { width: 100%; height: 100%; }
+    .hair-art .hair-skin { fill: #e8c4a6; }
+    .hair-art .hair-body { fill: #cdbfb2; }
+    .hair-art .hair-face path { fill: none; stroke: #9c7560; stroke-width: 2.2; stroke-linecap: round; }
+    @media (prefers-color-scheme: dark) { .hair-art .hair-body { fill: #4a3f37; } }
+    .hero-art { width: 62%; max-width: 260px; margin: 0 auto 12px; aspect-ratio: 200 / 304; background: var(--surface-2); border-radius: var(--radius); overflow: hidden; }
+    .tag { align-self: flex-start; display: inline-block; font-size: .72rem; font-weight: 700; padding: 3px 9px; border-radius: 999px; }
+    .tag.great { background: var(--good-soft); color: var(--good); }
+    .tag.good { background: var(--accent-soft); color: var(--accent); }
+    .tag.can { background: var(--surface-2); color: var(--muted); }
+    .tag.no { background: var(--bad-soft); color: var(--bad); }
+    .hscroll { display: flex; gap: 10px; overflow-x: auto; padding: 4px 4px 12px; justify-content: center; }
+    .sw { flex: none; width: 34px; height: 34px; border-radius: 50%; outline: 2px solid transparent; outline-offset: 2px; border: 2px solid rgba(255,255,255,.4); }
+    .sw.on { outline-color: var(--accent); }
+
     /* Overlays */
     .overlay { position: fixed; inset: 0; z-index: 20; }
     #busy { background: rgba(15, 12, 10, .92); color: #fff; display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; padding: 24px; gap: 10px; }
@@ -199,11 +226,13 @@
 <body>
   <section id="tab-scan" class="tab"></section>
   <section id="tab-result" class="tab hidden"></section>
+  <section id="tab-hair" class="tab hidden"></section>
   <section id="tab-shapes" class="tab hidden"></section>
 
   <nav class="bar" aria-label="Main">
     <button data-tab="scan" class="on"></button>
     <button data-tab="result"></button>
+    <button data-tab="hair"></button>
     <button data-tab="shapes"></button>
   </nav>
 
@@ -234,6 +263,7 @@
 
   <script src="shape.js"></script>
   <script src="styles.js"></script>
+  <script src="hair.js"></script>
   <script src="app.js"></script>
 </body>
 </html>
