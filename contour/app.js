@@ -318,6 +318,7 @@ function renderHair() {
   }
   $('#tab-hair').innerHTML = `<div class="wrap">
     <header class="top"><div><div class="eyebrow">Hairstyles</div><h1>Find your cut</h1></div></header>
+    <button class="btn primary block try-cta" data-act="try-open">${ICON.camera}Try haircuts on live</button>
     ${prefs}${body}
     <p class="note">Matches use face shape, hair type and the length you want. A good stylist can adapt any of these to your hair.</p>
   </div>`;
@@ -362,6 +363,7 @@ function hairSheet(id) {
       ${r && r.fit <= 0 ? `<p class="small muted" style="margin-top:8px">For a ${esc(shapeName)} face, the usual goal is: ${esc(SHAPES[pr.shape].goal)}</p>` : ''}
       ${r && !r.texOk ? `<p class="small muted" style="margin-top:8px">Easiest with ${esc(s.tex.join(', '))} hair. With yours it may take more styling.</p>` : ''}
     </div>
+    <button class="btn primary block" data-act="try-open" data-id="${s.id}" style="margin-bottom:14px">${ICON.camera}Try it on live</button>
     <div class="card"><h3>${ICON.scissors}Ask your ${pro} for</h3><p class="small">${esc(s.ask)}</p></div>
     <div class="card"><h3>${ICON.check}Styling it</h3><p class="small">${esc(s.tip)}</p>
       <p class="small muted" style="margin-top:8px">${LEN[s.len]} · ${EFFORT[s.maint]} · Works with ${esc(s.tex.join(', '))} hair</p></div>
@@ -668,6 +670,12 @@ document.addEventListener('click', async e => {
     S.scans = []; S.current = null; save(); closeSheet(); render();
   }
   else if (act === 'go-hair') showTab('hair');
+  else if (act === 'try-open') { closeSheet(); TRY.open(el.dataset.id); }
+  else if (act === 'try-close') TRY.close();
+  else if (act === 'try-snap') TRY.snap(el);
+  else if (act === 'try-style') TRY.setStyle(el.dataset.id);
+  else if (act === 'try-color') TRY.setColor(el.dataset.v);
+  else if (act === 'try-tint') TRY.toggleTint();
   else if (act === 'hpref') {
     const k = el.dataset.k, v = el.dataset.v;
     S.hair[k] = (k === 'type' && S.hair.type === v) ? null : v;
@@ -700,15 +708,22 @@ $('#file').addEventListener('change', async e => {
 
 document.addEventListener('keydown', e => {
   if (e.key !== 'Escape') return;
-  if (!$('#camera').classList.contains('hidden')) closeCamera();
+  if (!$('#tryon').classList.contains('hidden')) TRY.close();
+  else if (!$('#camera').classList.contains('hidden')) closeCamera();
   else closeSheet();
 });
 window.addEventListener('resize', () => { if (stream) sizeGuide(); });
-document.addEventListener('visibilitychange', () => { if (document.hidden && stream) closeCamera(); });
+document.addEventListener('visibilitychange', () => {
+  if (!document.hidden) return;
+  if (stream) closeCamera();
+  if (!$('#tryon').classList.contains('hidden')) TRY.close();
+});
 
 // ---------- Start ----------
 
 $('#camera .close').innerHTML = ICON.x;
+$('#tryon .close').innerHTML = ICON.x;
+$('#tryon .snap').innerHTML = ICON.camera;
 $('#camera .controls .side').innerHTML = ICON.image;
 renderNav();
 showTab(TABS.includes(S.tab) ? S.tab : 'scan');
